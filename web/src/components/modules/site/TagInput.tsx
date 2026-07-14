@@ -9,6 +9,8 @@ import { cn } from '@/lib/utils';
 
 const TAG_MAX_LENGTH = 32;
 const TAGS_MAX_COUNT = 20;
+const EXCLUSIVE_SITE_TAGS = ['公益', '付费'] as const;
+const EXCLUSIVE_SITE_TAG_SET = new Set<string>(EXCLUSIVE_SITE_TAGS);
 
 type TagInputProps = {
     value: string[];
@@ -16,7 +18,36 @@ type TagInputProps = {
     suggestions?: string[];
     placeholder?: string;
     className?: string;
+    showBillingTagShortcuts?: boolean;
 };
+
+function isExclusiveSiteTag(tag: string) {
+    return EXCLUSIVE_SITE_TAG_SET.has(tag);
+}
+
+function normalizeTagSelection(tags: string[]) {
+    let billingTag = '';
+    const customTags: string[] = [];
+    const seenCustomTags = new Set<string>();
+
+    for (const rawTag of tags) {
+        const tag = rawTag.trim();
+        if (!tag) continue;
+        if (isExclusiveSiteTag(tag)) {
+            billingTag = tag;
+            continue;
+        }
+        if (seenCustomTags.has(tag)) continue;
+        seenCustomTags.add(tag);
+        customTags.push(tag);
+    }
+
+    return billingTag ? [billingTag, ...customTags] : customTags;
+}
+
+function isSameTagSelection(left: string[], right: string[]) {
+    return left.length === right.length && left.every((tag, index) => tag === right[index]);
+}
 
 export function TagInput({
     value,
@@ -24,6 +55,7 @@ export function TagInput({
     suggestions = [],
     placeholder = '输入标签后回车',
     className,
+    showBillingTagShortcuts = false,
 }: TagInputProps) {
     const [draft, setDraft] = useState('');
     const [focused, setFocused] = useState(false);
@@ -34,9 +66,10 @@ export function TagInput({
         return suggestions.filter(
             (tag) =>
                 !value.includes(tag) &&
+                (!showBillingTagShortcuts || !isExclusiveSiteTag(tag)) &&
                 (keyword === '' || tag.toLowerCase().includes(keyword)),
         );
-    }, [suggestions, value, draft]);
+    }, [suggestions, value, draft, showBillingTagShortcuts]);
 
     function addTag(raw: string) {
         const tag = raw.trim();
@@ -45,15 +78,30 @@ export function TagInput({
             toast.error(`单个标签不能超过 ${TAG_MAX_LENGTH} 个字符`);
             return;
         }
-        if (value.includes(tag)) {
-            setDraft('');
-            return;
-        }
-        if (value.length >= TAGS_MAX_COUNT) {
+        const nextTags = normalizeTagSelection([...value, tag]);
+        if (nextTags.length > TAGS_MAX_COUNT) {
             toast.error(`标签数量不能超过 ${TAGS_MAX_COUNT} 个`);
             return;
         }
-        onChange([...value, tag]);
+        if (isSameTagSelection(nextTags, value)) {
+            setDraft('');
+            return;
+        }
+        onChange(nextTags);
+        setDraft('');
+    }
+
+    function toggleBillingTag(tag: (typeof EXCLUSIVE_SITE_TAGS)[number]) {
+        if (value.includes(tag)) {
+            onChange(value.filter((item) => item !== tag));
+            return;
+        }
+        const nextTags = normalizeTagSelection([...value, tag]);
+        if (nextTags.length > TAGS_MAX_COUNT) {
+            toast.error(`标签数量不能超过 ${TAGS_MAX_COUNT} 个`);
+            return;
+        }
+        onChange(nextTags);
         setDraft('');
     }
 
@@ -74,6 +122,35 @@ export function TagInput({
 
     return (
         <div className={cn('relative', className)}>
+            {showBillingTagShortcuts ? (
+                <div className="mb-2 rounded-xl border border-border/60 bg-muted/20 p-2">
+                    <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                        {EXCLUSIVE_SITE_TAGS.map((tag) => {
+                            const selected = value.includes(tag);
+                            return (
+                                <button
+                                    key={tag}
+                                    type="button"
+                                    aria-pressed={selected}
+                                    onMouseDown={(event) => event.preventDefault()}
+                                    onClick={() => toggleBillingTag(tag)}
+                                    className={cn(
+                                        'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+                                        selected
+                                            ? 'border-primary bg-primary text-primary-foreground'
+                                            : 'border-border bg-background text-muted-foreground hover:border-primary/60 hover:text-foreground',
+                                    )}
+                                >
+                                    {tag}
+                                </button>
+                            );
+                        })}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                        公益 / 付费互斥，可继续保留其他自定义标签。
+                    </div>
+                </div>
+            ) : null}
             <div
                 className="flex min-h-9 w-full cursor-text flex-wrap items-center gap-1.5 rounded-xl border border-input bg-transparent px-3 py-1.5 text-sm transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50"
                 onClick={() => inputRef.current?.focus()}

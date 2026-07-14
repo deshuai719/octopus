@@ -174,3 +174,27 @@ func TestParseGroupItemsPreservesScalarMapLabels(t *testing.T) {
 		t.Fatalf("expected nested group label, got %+v", groups)
 	}
 }
+
+func TestParseGroupItemsExtractsGroupRatios(t *testing.T) {
+	groups := parseGroupItems(map[string]any{
+		"data": map[string]any{
+			"default": map[string]any{"ratio": float64(1.25), "desc": "Default Group"},
+			"vip":     map[string]any{"rate_multiplier": "0.75", "completion_ratio": float64(0.8), "name": "VIP"},
+			"auto":    map[string]any{"ratio": "自动", "desc": "Auto"},
+		},
+	})
+
+	byKey := make(map[string]model.SiteUserGroup, len(groups))
+	for _, group := range groups {
+		byKey[group.GroupKey] = group
+	}
+	if group := byKey["default"]; group.Ratio == nil || *group.Ratio != 1.25 || group.Name != "Default Group" {
+		t.Fatalf("expected default group ratio/name, got %+v", group)
+	}
+	if group := byKey["vip"]; group.Ratio == nil || *group.Ratio != 0.75 || group.CompletionRatio == nil || *group.CompletionRatio != 0.8 {
+		t.Fatalf("expected vip group ratio and completion ratio, got %+v", group)
+	}
+	if group := byKey["auto"]; group.Ratio != nil {
+		t.Fatalf("expected non-numeric ratio to be ignored, got %+v", group)
+	}
+}

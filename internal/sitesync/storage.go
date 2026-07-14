@@ -138,6 +138,9 @@ func persistSyncSnapshotTx(tx *gorm.DB, accountID int, snapshot *syncSnapshot, n
 	for i := range snapshot.groups {
 		snapshot.groups[i].SiteAccountID = accountID
 		snapshot.groups[i].GroupKey = model.NormalizeSiteGroupKey(snapshot.groups[i].GroupKey)
+		if snapshot.groups[i].Ratio != nil || snapshot.groups[i].CompletionRatio != nil {
+			snapshot.groups[i].RatioLastSeenAt = &now
+		}
 		var existing *model.SiteUserGroup
 		if item, ok := existingGroupMap[snapshot.groups[i].GroupKey]; ok {
 			itemCopy := item

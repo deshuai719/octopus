@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/apperror"
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/siteorigin"
 	"gorm.io/gorm"
 )
 
@@ -29,6 +31,76 @@ func SiteList(ctx context.Context) ([]model.Site, error) {
 		normalizeSiteProxyFields(&sites[i])
 	}
 	return sites, nil
+}
+
+func SiteAccountIDsForRateSignal(ctx context.Context, siteURL, platform string) ([]int, error) {
+	normalizedURL := normalizeSignalSiteURL(siteURL)
+	if normalizedURL == "" {
+		return nil, nil
+	}
+	var sites []model.Site
+	if err := db.GetDB().WithContext(ctx).
+		Preload("Accounts").
+		Where("archived = ? AND enabled = ?", false, true).
+		Find(&sites).Error; err != nil {
+		return nil, err
+	}
+	ids := make([]int, 0)
+	for _, site := range sites {
+		if normalizeSignalSiteURL(site.BaseURL) != normalizedURL {
+			continue
+		}
+		if !rateSignalPlatformMatches(platform, string(site.Platform)) {
+			continue
+		}
+		for _, account := range site.Accounts {
+			if account.Enabled {
+				ids = append(ids, account.ID)
+			}
+		}
+	}
+	return ids, nil
+}
+
+func normalizeSignalSiteURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	origin, err := siteorigin.Normalize(raw)
+	if err != nil {
+		return ""
+	}
+	return origin
+}
+
+func rateSignalPlatformMatches(source, target string) bool {
+	source = normalizeRateSignalPlatform(source)
+	target = normalizeRateSignalPlatform(target)
+	if source == "" || target == "" {
+		return true
+	}
+	if source == target {
+		return true
+	}
+	return source == "newapi" && (target == "oneapi" || target == "onehub" || target == "donehub")
+}
+
+func normalizeRateSignalPlatform(platform string) string {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	platform = strings.ReplaceAll(platform, "-", "")
+	platform = strings.ReplaceAll(platform, "_", "")
+	switch platform {
+	case "newapi", "oneapi", "onehub", "donehub":
+		return platform
+	case "sub2api":
+		return "sub2api"
+	default:
+		return platform
+	}
 }
 
 func SiteListArchived(ctx context.Context) ([]model.Site, error) {
@@ -111,14 +183,14 @@ func SiteCreate(site *model.Site, ctx context.Context) error {
 	if site.EnabledSet && !site.Enabled {
 		err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			if err := tx.Create(site).Error; err != nil {
-				return err
+				return normalizeSiteOriginConflictError(err)
 			}
 			return tx.Model(&model.Site{}).Where("id = ?", site.ID).Update("enabled", false).Error
 		})
 		site.Enabled = false
 		return err
 	}
-	return db.GetDB().WithContext(ctx).Create(site).Error
+	return normalizeSiteOriginConflictError(db.GetDB().WithContext(ctx).Create(site).Error)
 }
 
 func SiteUpdate(req *model.SiteUpdateRequest, ctx context.Context) (*model.Site, error) {
@@ -200,6 +272,9 @@ func SiteUpdate(req *model.SiteUpdateRequest, ctx context.Context) (*model.Site,
 			}
 		}
 	}
+	if req.Platform != nil || req.BaseURL != nil {
+		selectFields = append(selectFields, "canonical_origin")
+	}
 	if req.Name != nil {
 		updates.Name = merged.Name
 	}
@@ -208,6 +283,9 @@ func SiteUpdate(req *model.SiteUpdateRequest, ctx context.Context) (*model.Site,
 	}
 	if req.BaseURL != nil {
 		updates.BaseURL = merged.BaseURL
+	}
+	if req.Platform != nil || req.BaseURL != nil {
+		updates.CanonicalOrigin = merged.CanonicalOrigin
 	}
 	if req.Enabled != nil {
 		updates.Enabled = merged.Enabled
@@ -245,10 +323,29 @@ func SiteUpdate(req *model.SiteUpdateRequest, ctx context.Context) (*model.Site,
 			Where("id = ?", req.ID).
 			Select(selectFields).
 			Updates(&updates).Error; err != nil {
-			return nil, fmt.Errorf("failed to update site: %w", err)
+			return nil, normalizeSiteOriginConflictError(err)
 		}
 	}
 	return SiteGet(req.ID, ctx)
+}
+
+func normalizeSiteOriginConflictError(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "canonical_origin") || strings.Contains(message, "idx_sites_canonical_origin") {
+		return siteOriginConflictError()
+	}
+	return err
+}
+
+func siteOriginConflictError() error {
+	return apperror.New("site.origin.conflict", "site canonical origin already exists").
+		WithStatus(409).
+		WithStage("site_match").
+		WithRetryable(false).
+		WithSuggestedAction("resolve_origin_conflict")
 }
 
 // mergeHeaders 将 upserts 合并进 existing：按 header key 大小写不敏感匹配，命中则仅

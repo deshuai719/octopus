@@ -57,6 +57,82 @@ func createSiteOpTestSiteAccount(t *testing.T, ctx context.Context, siteName, ac
 	return site, account
 }
 
+func TestSiteAccountIDsForRateSignalMatchesCompatiblePlatform(t *testing.T) {
+	ctx := setupSiteOpTestDB(t)
+
+	site := &model.Site{
+		Name:     "OneHub Site",
+		Platform: model.SitePlatformOneHub,
+		BaseURL:  "HTTPS://Example.COM/",
+		Enabled:  true,
+	}
+	if err := SiteCreate(site, ctx); err != nil {
+		t.Fatalf("SiteCreate failed: %v", err)
+	}
+	enabledAccount := &model.SiteAccount{
+		SiteID:         site.ID,
+		Name:           "enabled",
+		CredentialType: model.SiteCredentialTypeAccessToken,
+		AccessToken:    "token",
+		Enabled:        true,
+	}
+	if err := SiteAccountCreate(enabledAccount, ctx); err != nil {
+		t.Fatalf("SiteAccountCreate enabled failed: %v", err)
+	}
+	disabledAccount := &model.SiteAccount{
+		SiteID:         site.ID,
+		Name:           "disabled",
+		CredentialType: model.SiteCredentialTypeAccessToken,
+		AccessToken:    "disabled-token",
+		Enabled:        false,
+	}
+	if err := SiteAccountCreate(disabledAccount, ctx); err != nil {
+		t.Fatalf("SiteAccountCreate disabled failed: %v", err)
+	}
+	if err := SiteAccountEnabled(disabledAccount.ID, false, ctx); err != nil {
+		t.Fatalf("SiteAccountEnabled disabled failed: %v", err)
+	}
+
+	ids, err := SiteAccountIDsForRateSignal(ctx, "https://example.com", "newapi")
+	if err != nil {
+		t.Fatalf("SiteAccountIDsForRateSignal failed: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != enabledAccount.ID {
+		t.Fatalf("ids = %#v, want only enabled account %d", ids, enabledAccount.ID)
+	}
+}
+
+func TestSiteAccountIDsForRateSignalRejectsDifferentPlatform(t *testing.T) {
+	ctx := setupSiteOpTestDB(t)
+	site := &model.Site{
+		Name:     "Sub2API Site",
+		Platform: model.SitePlatformSub2API,
+		BaseURL:  "https://example.com",
+		Enabled:  true,
+	}
+	if err := SiteCreate(site, ctx); err != nil {
+		t.Fatalf("SiteCreate failed: %v", err)
+	}
+	account := &model.SiteAccount{
+		SiteID:         site.ID,
+		Name:           "enabled",
+		CredentialType: model.SiteCredentialTypeAccessToken,
+		AccessToken:    "token",
+		Enabled:        true,
+	}
+	if err := SiteAccountCreate(account, ctx); err != nil {
+		t.Fatalf("SiteAccountCreate failed: %v", err)
+	}
+
+	ids, err := SiteAccountIDsForRateSignal(ctx, "https://example.com", "newapi")
+	if err != nil {
+		t.Fatalf("SiteAccountIDsForRateSignal failed: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("ids = %#v, want none", ids)
+	}
+}
+
 func createLegacySitePricesRow(t *testing.T, ctx context.Context, accountID int) {
 	t.Helper()
 	if err := dbpkg.GetDB().WithContext(ctx).Exec(`CREATE TABLE site_prices (
@@ -216,6 +292,29 @@ func TestSiteCreateNormalizesTags(t *testing.T) {
 	}
 }
 
+func TestSiteCreateNormalizesMutuallyExclusiveBillingTags(t *testing.T) {
+	ctx := setupSiteOpTestDB(t)
+
+	site := &model.Site{
+		Name:     "tag-billing-site",
+		Platform: model.SitePlatformNewAPI,
+		BaseURL:  "https://example.com",
+		Enabled:  true,
+		Tags:     []string{model.SiteTagPublic, "prod", model.SiteTagPaid, " prod "},
+	}
+	if err := SiteCreate(site, ctx); err != nil {
+		t.Fatalf("SiteCreate failed: %v", err)
+	}
+
+	reloaded, err := SiteGet(site.ID, ctx)
+	if err != nil {
+		t.Fatalf("SiteGet failed: %v", err)
+	}
+	if len(reloaded.Tags) != 2 || reloaded.Tags[0] != model.SiteTagPaid || reloaded.Tags[1] != "prod" {
+		t.Fatalf("expected normalized tags [付费 prod], got %#v", reloaded.Tags)
+	}
+}
+
 func TestSiteUpdateSetAndClearTags(t *testing.T) {
 	ctx := setupSiteOpTestDB(t)
 
@@ -241,6 +340,18 @@ func TestSiteUpdateSetAndClearTags(t *testing.T) {
 		t.Fatalf("expected tags [prod cheap], got %#v", updated.Tags)
 	}
 
+	var billingReq model.SiteUpdateRequest
+	if err := json.Unmarshal([]byte(`{"id":`+fmt.Sprint(site.ID)+`,"tags":["付费","公益","vip"]}`), &billingReq); err != nil {
+		t.Fatalf("json.Unmarshal SiteUpdateRequest failed: %v", err)
+	}
+	updated, err = SiteUpdate(&billingReq, ctx)
+	if err != nil {
+		t.Fatalf("SiteUpdate failed: %v", err)
+	}
+	if len(updated.Tags) != 2 || updated.Tags[0] != model.SiteTagPublic || updated.Tags[1] != "vip" {
+		t.Fatalf("expected tags [公益 vip], got %#v", updated.Tags)
+	}
+
 	var nameReq model.SiteUpdateRequest
 	if err := json.Unmarshal([]byte(`{"id":`+fmt.Sprint(site.ID)+`,"name":"tag-update-site-renamed"}`), &nameReq); err != nil {
 		t.Fatalf("json.Unmarshal SiteUpdateRequest failed: %v", err)
@@ -251,6 +362,9 @@ func TestSiteUpdateSetAndClearTags(t *testing.T) {
 	}
 	if len(updated.Tags) != 2 {
 		t.Fatalf("expected update without tags to keep tags, got %#v", updated.Tags)
+	}
+	if updated.Tags[0] != model.SiteTagPublic || updated.Tags[1] != "vip" {
+		t.Fatalf("expected update without tags to keep [公益 vip], got %#v", updated.Tags)
 	}
 
 	var clearReq model.SiteUpdateRequest
@@ -278,7 +392,7 @@ func TestSiteBatchApply(t *testing.T) {
 	siteB := &model.Site{
 		Name:     "batch-apply-b",
 		Platform: model.SitePlatformNewAPI,
-		BaseURL:  "https://example.com",
+		BaseURL:  "https://example.net",
 		Enabled:  true,
 	}
 	for _, site := range []*model.Site{siteA, siteB} {
@@ -427,6 +541,36 @@ func TestSiteBatchEditTagsOnlySkipsProjection(t *testing.T) {
 	})
 }
 
+func TestSiteBatchEditSwitchesMutuallyExclusiveBillingTags(t *testing.T) {
+	ctx := setupSiteOpTestDB(t)
+
+	site := &model.Site{
+		Name:     "batch-edit-billing",
+		Platform: model.SitePlatformNewAPI,
+		BaseURL:  "https://example.com",
+		Enabled:  true,
+		Tags:     []string{model.SiteTagPublic, "legacy"},
+	}
+	if err := SiteCreate(site, ctx); err != nil {
+		t.Fatalf("SiteCreate failed: %v", err)
+	}
+
+	if _, _, err := SiteBatchEdit(&model.SiteBatchEditRequest{
+		IDs:     []int{site.ID},
+		AddTags: []string{model.SiteTagPaid},
+	}, ctx); err != nil {
+		t.Fatalf("SiteBatchEdit failed: %v", err)
+	}
+
+	reloaded, err := SiteGet(site.ID, ctx)
+	if err != nil {
+		t.Fatalf("SiteGet failed: %v", err)
+	}
+	if len(reloaded.Tags) != 2 || reloaded.Tags[0] != model.SiteTagPaid || reloaded.Tags[1] != "legacy" {
+		t.Fatalf("expected tags [付费 legacy], got %#v", reloaded.Tags)
+	}
+}
+
 func TestSiteBatchEditRejectsEmptyPatch(t *testing.T) {
 	ctx := setupSiteOpTestDB(t)
 
@@ -463,6 +607,37 @@ func TestSiteBatchEditRemoveWinsOverAdd(t *testing.T) {
 	}
 	if len(reloaded.Tags) != 0 {
 		t.Fatalf("expected empty tags, got %#v", reloaded.Tags)
+	}
+}
+
+func TestSiteBatchEditRemoveWinsOverExclusiveBillingTagAdd(t *testing.T) {
+	ctx := setupSiteOpTestDB(t)
+
+	site := &model.Site{
+		Name:     "batch-edit-billing-remove-wins",
+		Platform: model.SitePlatformNewAPI,
+		BaseURL:  "https://example.com",
+		Enabled:  true,
+		Tags:     []string{model.SiteTagPaid, "legacy"},
+	}
+	if err := SiteCreate(site, ctx); err != nil {
+		t.Fatalf("SiteCreate failed: %v", err)
+	}
+
+	if _, _, err := SiteBatchEdit(&model.SiteBatchEditRequest{
+		IDs:        []int{site.ID},
+		AddTags:    []string{model.SiteTagPublic},
+		RemoveTags: []string{model.SiteTagPublic},
+	}, ctx); err != nil {
+		t.Fatalf("SiteBatchEdit failed: %v", err)
+	}
+
+	reloaded, err := SiteGet(site.ID, ctx)
+	if err != nil {
+		t.Fatalf("SiteGet failed: %v", err)
+	}
+	if len(reloaded.Tags) != 2 || reloaded.Tags[0] != model.SiteTagPaid || reloaded.Tags[1] != "legacy" {
+		t.Fatalf("expected tags [付费 legacy], got %#v", reloaded.Tags)
 	}
 }
 

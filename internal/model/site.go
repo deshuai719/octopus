@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/bestruirui/octopus/internal/siteorigin"
 	"github.com/bestruirui/octopus/internal/transformer/outbound"
 )
 
@@ -173,6 +174,7 @@ type Site struct {
 	Name               string             `json:"name" gorm:"unique;not null"`
 	Platform           SitePlatform       `json:"platform" gorm:"type:varchar(32);not null"`
 	BaseURL            string             `json:"base_url" gorm:"not null"`
+	CanonicalOrigin    *string            `json:"canonical_origin,omitempty" gorm:"size:512;-:migration"`
 	Enabled            bool               `json:"enabled" gorm:"default:true"`
 	EnabledSet         bool               `json:"-" gorm:"-"`
 	ProxyMode          ProxyUsageMode     `json:"proxy_mode" gorm:"type:varchar(16);not null;default:'direct'"`
@@ -318,6 +320,9 @@ type SiteUserGroup struct {
 	GroupKey                string                   `json:"group_key" gorm:"size:128;uniqueIndex:idx_site_account_group;not null"`
 	Name                    string                   `json:"name"`
 	RawPayload              string                   `json:"raw_payload"`
+	Ratio                   *float64                 `json:"ratio,omitempty"`
+	CompletionRatio         *float64                 `json:"completion_ratio,omitempty"`
+	RatioLastSeenAt         *time.Time               `json:"ratio_last_seen_at,omitempty"`
 	ProjectionDisabled      bool                     `json:"projection_disabled" gorm:"default:false"`
 	ProjectionSuspended     bool                     `json:"projection_suspended" gorm:"default:false;index"`
 	ProjectionSuspendReason string                   `json:"projection_suspend_reason"`
@@ -506,9 +511,46 @@ func NormalizeSiteGroupKey(value string) string {
 const (
 	SiteTagMaxLength = 32
 	SiteTagsMaxCount = 20
+
+	SiteTagPublic = "公益"
+	SiteTagPaid   = "付费"
 )
 
 func NormalizeSiteTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	seenCustom := make(map[string]struct{}, len(tags))
+	custom := make([]string, 0, len(tags))
+	billingTag := ""
+	for _, tag := range tags {
+		trimmed := strings.TrimSpace(tag)
+		if trimmed == "" {
+			continue
+		}
+		switch trimmed {
+		case SiteTagPublic, SiteTagPaid:
+			billingTag = trimmed
+			continue
+		}
+		if _, ok := seenCustom[trimmed]; ok {
+			continue
+		}
+		seenCustom[trimmed] = struct{}{}
+		custom = append(custom, trimmed)
+	}
+	normalized := make([]string, 0, len(custom)+1)
+	if billingTag != "" {
+		normalized = append(normalized, billingTag)
+	}
+	normalized = append(normalized, custom...)
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func NormalizeSiteTagsForRemoval(tags []string) []string {
 	if len(tags) == 0 {
 		return nil
 	}
@@ -856,6 +898,16 @@ func (p SitePlatform) Validate() error {
 	}
 }
 
+func IsManagedSitePlatform(platform SitePlatform) bool {
+	switch platform {
+	case SitePlatformNewAPI, SitePlatformAnyRouter, SitePlatformOneAPI, SitePlatformOneHub,
+		SitePlatformDoneHub, SitePlatformSub2API:
+		return true
+	default:
+		return false
+	}
+}
+
 func (t SiteCredentialType) Validate() error {
 	switch t {
 	case SiteCredentialTypeUsernamePassword, SiteCredentialTypeAccessToken, SiteCredentialTypeAPIKey:
@@ -899,6 +951,15 @@ func (s *Site) Normalize() {
 	s.Tags = NormalizeSiteTags(s.Tags)
 	s.RouteBaseURLs = NormalizeSiteRouteBaseURLs(s.RouteBaseURLs)
 	s.normalizeLegacyAPIPlatform()
+	if IsManagedSitePlatform(s.Platform) {
+		if origin, err := siteorigin.Normalize(s.BaseURL); err == nil {
+			s.CanonicalOrigin = &origin
+		} else {
+			s.CanonicalOrigin = nil
+		}
+	} else {
+		s.CanonicalOrigin = nil
+	}
 }
 
 func (s *Site) normalizeLegacyAPIPlatform() {
@@ -957,6 +1018,9 @@ func (s *Site) Validate() error {
 	}
 	if parsed.Host == "" {
 		return fmt.Errorf("site base url must have a host")
+	}
+	if IsManagedSitePlatform(s.Platform) && s.CanonicalOrigin == nil {
+		return fmt.Errorf("site canonical origin is invalid")
 	}
 	if err := ValidateSiteRouteBaseURLs(s.RouteBaseURLs); err != nil {
 		return err

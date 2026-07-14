@@ -26,7 +26,7 @@ const (
 	CodeAuthPasswordIncorrect  = "auth.password_incorrect"
 	CodeAuthAPIKeyDisabled     = "auth.api_key_disabled"
 	CodeAuthAPIKeyCostExceeded = "auth.api_key_cost_exceeded"
-	CodeAuthAPIKeyRateLimited = "auth.api_key_rate_limited"
+	CodeAuthAPIKeyRateLimited  = "auth.api_key_rate_limited"
 
 	CodeSiteSub2APIAPIKeyRequired      = "site.sub2api.api_key_required"
 	CodeSiteSub2APIModelAPIKeyRequired = "site.sub2api.model_api_key_required"
@@ -37,11 +37,14 @@ const (
 // Error carries a stable machine-readable code plus a default human-readable message.
 // The default message is intended as a fallback; UI clients should translate by Code.
 type Error struct {
-	Code    string
-	Message string
-	Status  int
-	Params  map[string]any
-	Err     error
+	Code            string
+	Message         string
+	Status          int
+	Params          map[string]any
+	Stage           string
+	Retryable       *bool
+	SuggestedAction string
+	Err             error
 }
 
 func New(code string, message string) *Error {
@@ -114,6 +117,27 @@ func (e *Error) WithParam(key string, value any) *Error {
 	return e
 }
 
+func (e *Error) WithStage(stage string) *Error {
+	if e != nil {
+		e.Stage = stage
+	}
+	return e
+}
+
+func (e *Error) WithRetryable(retryable bool) *Error {
+	if e != nil {
+		e.Retryable = &retryable
+	}
+	return e
+}
+
+func (e *Error) WithSuggestedAction(action string) *Error {
+	if e != nil {
+		e.SuggestedAction = action
+	}
+	return e
+}
+
 func Code(err error) string {
 	var appErr *Error
 	if errors.As(err, &appErr) && appErr != nil {
@@ -147,6 +171,30 @@ func Params(err error) map[string]any {
 		return appErr.Params
 	}
 	return nil
+}
+
+func Stage(err error) string {
+	var appErr *Error
+	if errors.As(err, &appErr) && appErr != nil {
+		return appErr.Stage
+	}
+	return ""
+}
+
+func Retryable(err error) *bool {
+	var appErr *Error
+	if errors.As(err, &appErr) && appErr != nil {
+		return appErr.Retryable
+	}
+	return nil
+}
+
+func SuggestedAction(err error) string {
+	var appErr *Error
+	if errors.As(err, &appErr) && appErr != nil {
+		return appErr.SuggestedAction
+	}
+	return ""
 }
 
 func IsCode(err error, code string) bool {

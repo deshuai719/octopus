@@ -81,5 +81,6 @@ func changeUsername(c *gin.Context) {
 }
 
 func status(c *gin.Context) {
+	c.Header("X-Octopus-Direct-Capture-Version", "1")
 	resp.Success(c, "ok")
 }

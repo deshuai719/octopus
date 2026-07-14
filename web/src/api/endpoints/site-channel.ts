@@ -77,6 +77,9 @@ export type SiteProjectedChannelSettings = {
 export type SiteChannelGroup = {
     group_key: string;
     group_name: string;
+    ratio?: number | null;
+    completion_ratio?: number | null;
+    ratio_last_seen_at?: number | null;
     projection_disabled: boolean;
     projection_suspended: boolean;
     projection_suspend_reason?: string;
@@ -289,6 +292,9 @@ function normalizeSiteChannelAccount(account: SiteChannelAccountServer): SiteCha
         ...account,
         groups: (account.groups ?? []).map((group) => ({
             ...group,
+            ratio: typeof group.ratio === 'number' ? group.ratio : null,
+            completion_ratio: typeof group.completion_ratio === 'number' ? group.completion_ratio : null,
+            ratio_last_seen_at: typeof group.ratio_last_seen_at === 'number' ? group.ratio_last_seen_at : null,
             projection_disabled: group.projection_disabled === true,
             projection_suspended: group.projection_suspended === true,
             projection_suspend_reason: typeof group.projection_suspend_reason === 'string' ? group.projection_suspend_reason : undefined,

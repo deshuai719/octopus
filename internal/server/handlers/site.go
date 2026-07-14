@@ -13,6 +13,7 @@ import (
 	"github.com/bestruirui/octopus/internal/apperror"
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/requestmeta"
 	"github.com/bestruirui/octopus/internal/server/middleware"
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/server/router"
@@ -47,6 +48,7 @@ func init() {
 		AddRoute(router.NewRoute("/auth-recovery/:id", http.MethodGet).Handle(getSiteAuthRecovery)).
 		AddRoute(router.NewRoute("/auth-recovery/:id/confirm", http.MethodPost).Handle(confirmSiteAuthRecovery)).
 		AddRoute(router.NewRoute("/auth-recovery/:id/cancel", http.MethodPost).Handle(cancelSiteAuthRecovery)).
+		AddRoute(router.NewRoute("/direct-capture/:id", http.MethodGet).Handle(getSiteDirectCapture)).
 		AddRoute(router.NewRoute("/:id/available-models", http.MethodGet).Handle(getSiteAvailableModels))
 
 	router.NewGroupRouter("/api/v1/site").
@@ -56,11 +58,21 @@ func init() {
 		AddRoute(router.NewRoute("/update", http.MethodPost).Handle(updateSite)).
 		AddRoute(router.NewRoute("/enable", http.MethodPost).Handle(enableSite)).
 		AddRoute(router.NewRoute("/detect", http.MethodPost).Handle(detectSitePlatform)).
+		AddRoute(router.NewRoute("/ratio-change", http.MethodPost).Handle(handleSiteRatioChange)).
 		AddRoute(router.NewRoute("/batch", http.MethodPost).Handle(batchSite)).
 		AddRoute(router.NewRoute("/batch/edit", http.MethodPost).Handle(batchEditSite)).
 		AddRoute(router.NewRoute("/account/create", http.MethodPost).Handle(createSiteAccount)).
 		AddRoute(router.NewRoute("/account/update", http.MethodPost).Handle(updateSiteAccount)).
 		AddRoute(router.NewRoute("/account/enable", http.MethodPost).Handle(enableSiteAccount))
+
+	router.NewGroupRouter("/api/v1/site/direct-capture").
+		Use(middleware.Auth()).
+		Use(middleware.RequireJSON()).
+		AddRoute(router.NewRoute("/preview", http.MethodPost).Handle(previewSiteDirectCapture)).
+		AddRoute(router.NewRoute("/:id/resolve", http.MethodPost).Handle(resolveSiteDirectCapture)).
+		AddRoute(router.NewRoute("/:id/confirm", http.MethodPost).Handle(confirmSiteDirectCapture)).
+		AddRoute(router.NewRoute("/:id/cancel", http.MethodPost).Handle(cancelSiteDirectCapture)).
+		AddRoute(router.NewRoute("/:id/retry-sync", http.MethodPost).Handle(retrySiteDirectCaptureSync))
 
 	router.NewGroupRouter("/api/v1/site").
 		Use(middleware.Auth()).
@@ -152,7 +164,7 @@ func createSite(c *gin.Context) {
 		return
 	}
 	if err := op.SiteCreate(&site, c.Request.Context()); err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		resp.ErrorWithAppError(c, http.StatusInternalServerError, err)
 		return
 	}
 	resp.Success(c, site)
@@ -166,7 +178,7 @@ func updateSite(c *gin.Context) {
 	}
 	site, err := op.SiteUpdate(&req, c.Request.Context())
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		resp.ErrorWithAppError(c, http.StatusInternalServerError, err)
 		return
 	}
 	siteID := site.ID
@@ -396,6 +408,36 @@ func syncAllSiteAccounts(c *gin.Context) {
 	resp.Success(c, nil)
 }
 
+func handleSiteRatioChange(c *gin.Context) {
+	var request struct {
+		SiteURL   string   `json:"site_url" binding:"required"`
+		Platform  string   `json:"platform"`
+		Groups    []string `json:"groups"`
+		ChangedAt string   `json:"changed_at"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		resp.InvalidJSON(c)
+		return
+	}
+	accountIDs, err := op.SiteAccountIDsForRateSignal(c.Request.Context(), request.SiteURL, request.Platform)
+	if err != nil {
+		resp.Error(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(accountIDs) > 0 {
+		ids := append([]int(nil), accountIDs...)
+		safe.Go("site-ratio-change-sync", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			sitesvc.SyncAccountsWithOptions(ctx, ids, sitesync.SiteBatchOptions{Trigger: sitesync.SiteBatchTriggerManual})
+		})
+	}
+	resp.Success(c, gin.H{
+		"matched_accounts": len(accountIDs),
+		"groups":           request.Groups,
+	})
+}
+
 func checkinAllSiteAccounts(c *gin.Context) {
 	safe.Go("site-checkin-all", func() {
 		sitesvc.CheckinAllWithOptions(context.Background(), sitesync.SiteBatchOptions{Trigger: sitesync.SiteBatchTriggerManual})
@@ -493,6 +535,78 @@ func cancelSiteAuthRecovery(c *gin.Context) {
 	resp.Success(c, view)
 }
 
+func previewSiteDirectCapture(c *gin.Context) {
+	var candidate sitesync.DirectCaptureCandidate
+	if err := decodeStrictRecoveryJSON(c, &candidate); err != nil {
+		resp.ErrorWithAppError(c, http.StatusBadRequest, apperror.InvalidJSON("invalid direct capture preview payload"))
+		return
+	}
+	view, err := sitesvc.PreviewDirectCapture(c.Request.Context(), sitesvc.DirectCapturePreviewRequest{
+		OperationID: requestmeta.GinOperationID(c),
+		Candidate:   candidate,
+	})
+	if err != nil {
+		resp.ErrorWithAppError(c, http.StatusBadRequest, err)
+		return
+	}
+	resp.Success(c, view)
+}
+
+func resolveSiteDirectCapture(c *gin.Context) {
+	var request sitesvc.DirectCaptureResolveRequest
+	if err := decodeStrictRecoveryJSON(c, &request); err != nil {
+		resp.ErrorWithAppError(c, http.StatusBadRequest, apperror.InvalidJSON("invalid direct capture resolution payload"))
+		return
+	}
+	view, err := sitesvc.ResolveDirectCapture(c.Request.Context(), c.Param("id"), request)
+	if err != nil {
+		resp.ErrorWithAppError(c, http.StatusBadRequest, err)
+		return
+	}
+	resp.Success(c, view)
+}
+
+func confirmSiteDirectCapture(c *gin.Context) {
+	var request sitesvc.DirectCaptureConfirmRequest
+	if err := decodeStrictRecoveryJSON(c, &request); err != nil {
+		resp.ErrorWithAppError(c, http.StatusBadRequest, apperror.InvalidJSON("invalid direct capture confirmation payload"))
+		return
+	}
+	view, err := sitesvc.ConfirmDirectCapture(c.Request.Context(), c.Param("id"), request)
+	if err != nil {
+		resp.ErrorWithAppError(c, http.StatusBadRequest, err)
+		return
+	}
+	resp.Success(c, view)
+}
+
+func getSiteDirectCapture(c *gin.Context) {
+	view, err := sitesvc.GetDirectCapture(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		resp.ErrorWithAppError(c, http.StatusBadRequest, err)
+		return
+	}
+	resp.Success(c, view)
+}
+
+func cancelSiteDirectCapture(c *gin.Context) {
+	view, err := sitesvc.CancelDirectCapture(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		resp.ErrorWithAppError(c, http.StatusBadRequest, err)
+		return
+	}
+	resp.Success(c, view)
+}
+
+func retrySiteDirectCaptureSync(c *gin.Context) {
+	view, err := sitesvc.RetryDirectCaptureSync(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		resp.ErrorWithAppError(c, http.StatusBadRequest, err)
+		return
+	}
+	resp.Success(c, view)
+}
+
 func decodeStrictRecoveryJSON(c *gin.Context, target any) error {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64*1024)
 	decoder := json.NewDecoder(c.Request.Body)
@@ -558,7 +672,7 @@ func batchEditSite(c *gin.Context) {
 		return
 	}
 	req.AddTags = model.NormalizeSiteTags(req.AddTags)
-	req.RemoveTags = model.NormalizeSiteTags(req.RemoveTags)
+	req.RemoveTags = model.NormalizeSiteTagsForRemoval(req.RemoveTags)
 	if err := model.ValidateSiteTags(req.AddTags); err != nil {
 		resp.Error(c, http.StatusBadRequest, err.Error())
 		return

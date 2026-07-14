@@ -4,22 +4,28 @@ import (
 	"net/http"
 
 	"github.com/bestruirui/octopus/internal/apperror"
+	"github.com/bestruirui/octopus/internal/requestmeta"
 	"github.com/gin-gonic/gin"
 )
 
 type ResponseStruct struct {
-	Code      int            `json:"code" example:"200"`
-	ErrorCode string         `json:"error_code,omitempty" example:"site.sub2api.api_key_required"`
-	Message   string         `json:"message" example:"success"`
-	Params    map[string]any `json:"params,omitempty"`
-	Data      interface{}    `json:"data,omitempty"`
+	Code            int            `json:"code" example:"200"`
+	ErrorCode       string         `json:"error_code,omitempty" example:"site.sub2api.api_key_required"`
+	Message         string         `json:"message" example:"success"`
+	Params          map[string]any `json:"params,omitempty"`
+	Data            interface{}    `json:"data,omitempty"`
+	OperationID     string         `json:"operation_id,omitempty"`
+	Stage           string         `json:"stage,omitempty"`
+	Retryable       *bool          `json:"retryable,omitempty"`
+	SuggestedAction string         `json:"suggested_action,omitempty"`
 }
 
 func Success(c *gin.Context, data any) {
 	c.JSON(http.StatusOK, ResponseStruct{
-		Code:    http.StatusOK,
-		Message: "success",
-		Data:    data,
+		Code:        http.StatusOK,
+		Message:     "success",
+		Data:        data,
+		OperationID: requestmeta.GinOperationID(c),
 	})
 }
 
@@ -32,7 +38,7 @@ func ErrorWithAppError(c *gin.Context, fallbackStatus int, err error) {
 	if appStatus := apperror.Status(err); appStatus != 0 {
 		status = appStatus
 	}
-	ErrorWithCodeAndParams(c, status, apperror.Code(err), apperror.Message(err), apperror.Params(err))
+	ErrorWithDetails(c, status, apperror.Code(err), apperror.Message(err), apperror.Params(err), apperror.Stage(err), apperror.Retryable(err), apperror.SuggestedAction(err))
 }
 
 func ErrorWithCode(c *gin.Context, status int, errorCode string, message string) {
@@ -40,11 +46,19 @@ func ErrorWithCode(c *gin.Context, status int, errorCode string, message string)
 }
 
 func ErrorWithCodeAndParams(c *gin.Context, status int, errorCode string, message string, params map[string]any) {
+	ErrorWithDetails(c, status, errorCode, message, params, "", nil, "")
+}
+
+func ErrorWithDetails(c *gin.Context, status int, errorCode string, message string, params map[string]any, stage string, retryable *bool, suggestedAction string) {
 	c.AbortWithStatusJSON(status, ResponseStruct{
-		Code:      status,
-		ErrorCode: errorCode,
-		Message:   message,
-		Params:    params,
+		Code:            status,
+		ErrorCode:       errorCode,
+		Message:         message,
+		Params:          params,
+		OperationID:     requestmeta.GinOperationID(c),
+		Stage:           stage,
+		Retryable:       retryable,
+		SuggestedAction: suggestedAction,
 	})
 }
 

@@ -30,6 +30,9 @@ type SiteRouteSummary struct {
 type SiteChannelGroup struct {
 	GroupKey                string                         `json:"group_key"`
 	GroupName               string                         `json:"group_name"`
+	Ratio                   *float64                       `json:"ratio,omitempty"`
+	CompletionRatio         *float64                       `json:"completion_ratio,omitempty"`
+	RatioLastSeenAt         *int64                         `json:"ratio_last_seen_at,omitempty"`
 	ProjectionDisabled      bool                           `json:"projection_disabled"`
 	ProjectionSuspended     bool                           `json:"projection_suspended"`
 	ProjectionSuspendReason string                         `json:"projection_suspend_reason,omitempty"`

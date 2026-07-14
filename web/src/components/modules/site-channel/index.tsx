@@ -693,6 +693,17 @@ const SITE_GROUP_FILTER_ALL_VALUE = '__site-group-all__';
 
 const STALE_MODEL_SYNC_STATUSES = ['stale', 'failed', 'unresolved'];
 
+function formatGroupRatioLabel(group: Pick<SiteChannelGroup, 'ratio' | 'completion_ratio'>) {
+    const parts: string[] = [];
+    if (typeof group.ratio === 'number') {
+        parts.push(`倍率 ${group.ratio.toFixed(2).replace(/\.?0+$/, '')}x`);
+    }
+    if (typeof group.completion_ratio === 'number') {
+        parts.push(`补全 ${group.completion_ratio.toFixed(2).replace(/\.?0+$/, '')}x`);
+    }
+    return parts.join(' · ');
+}
+
 function getGroupStatusBadge(group: SiteChannelGroup): { label: string; className: string } | null {
     if (group.projection_suspended) {
         return { label: '暂停', className: 'rounded-full bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive' };
@@ -1966,28 +1977,32 @@ function SiteAccountPanel({
                                         <span className="text-[11px] text-muted-foreground">{account.groups.length} 组</span>
                                     </div>
                                 </SelectItem>
-                                {account.groups.map((group) => (
-                                    <SelectItem key={group.group_key} value={group.group_key} className="rounded-xl py-2">
-                                        <div className="flex w-full min-w-0 items-start justify-between gap-3">
-                                            <div className="min-w-0">
-                                                <div className="truncate">{group.group_name || group.group_key}</div>
-                                                <div className="text-[11px] text-muted-foreground">
-                                                    {group.models.length} 模型 · Key {group.enabled_key_count}/{group.key_count}
-                                                    {group.projection_disabled ? ' · 不投影' : ''}
-                                                    {group.projection_suspended ? ' · 已暂停' : STALE_MODEL_SYNC_STATUSES.includes(group.model_sync_status) ? ' · 沿用历史' : ''}
-                                                    {group.masked_pending_key_count > 0 ? ` · 待补全 ${group.masked_pending_key_count}` : ''}
-                                                    {group.has_projected_channel ? ` · 投影 ${group.projected_keys.length}` : ''}
+                                {account.groups.map((group) => {
+                                    const ratioLabel = formatGroupRatioLabel(group);
+                                    return (
+                                        <SelectItem key={group.group_key} value={group.group_key} className="rounded-xl py-2">
+                                            <div className="flex w-full min-w-0 items-start justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <div className="truncate">{group.group_name || group.group_key}</div>
+                                                    <div className="text-[11px] text-muted-foreground">
+                                                        {group.models.length} 模型 · Key {group.enabled_key_count}/{group.key_count}
+                                                        {ratioLabel ? ` · ${ratioLabel}` : ''}
+                                                        {group.projection_disabled ? ' · 不投影' : ''}
+                                                        {group.projection_suspended ? ' · 已暂停' : STALE_MODEL_SYNC_STATUSES.includes(group.model_sync_status) ? ' · 沿用历史' : ''}
+                                                        {group.masked_pending_key_count > 0 ? ` · 待补全 ${group.masked_pending_key_count}` : ''}
+                                                        {group.has_projected_channel ? ` · 投影 ${group.projected_keys.length}` : ''}
+                                                    </div>
                                                 </div>
+                                                {(() => {
+                                                    const statusBadge = getGroupStatusBadge(group);
+                                                    return statusBadge ? (
+                                                        <span className={statusBadge.className}>{statusBadge.label}</span>
+                                                    ) : null;
+                                                })()}
                                             </div>
-                                            {(() => {
-                                                const statusBadge = getGroupStatusBadge(group);
-                                                return statusBadge ? (
-                                                    <span className={statusBadge.className}>{statusBadge.label}</span>
-                                                ) : null;
-                                            })()}
-                                        </div>
-                                    </SelectItem>
-                                ))}
+                                        </SelectItem>
+                                    );
+                                })}
                             </SelectContent>
                         </Select>
 

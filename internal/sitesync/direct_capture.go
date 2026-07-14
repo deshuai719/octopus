@@ -1,0 +1,366 @@
+package sitesync
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"strings"
+	"time"
+
+	"github.com/bestruirui/octopus/internal/apperror"
+	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/siteorigin"
+)
+
+const (
+	DirectCaptureMaxCredentialLength = 16 * 1024
+	DirectCaptureMaxEvidenceItems    = 64
+)
+
+type DirectCaptureEvidence struct {
+	Code  string `json:"code"`
+	Value string `json:"value,omitempty"`
+}
+
+type DirectCaptureCandidate struct {
+	Origin         string                  `json:"origin"`
+	Platform       model.SitePlatform      `json:"platform"`
+	AccessToken    string                  `json:"access_token,omitempty"`
+	RefreshToken   string                  `json:"refresh_token,omitempty"`
+	TokenExpiresAt int64                   `json:"token_expires_at,omitempty"`
+	PlatformUserID *int                    `json:"platform_user_id,omitempty"`
+	IdentityLabel  string                  `json:"identity_label,omitempty"`
+	Evidence       []DirectCaptureEvidence `json:"evidence"`
+}
+
+type ValidatedDirectCaptureCandidate struct {
+	Origin          string
+	Platform        model.SitePlatform
+	AccessToken     string
+	RefreshToken    string
+	TokenExpiresAt  int64
+	PlatformUserID  *int
+	IdentityLabel   string
+	AccessTokenMask string
+	EvidenceCodes   []string
+}
+
+type directCaptureProfile struct {
+	Path    string
+	Payload map[string]any
+}
+
+func ValidateDirectCaptureCandidate(ctx context.Context, input DirectCaptureCandidate) (*ValidatedDirectCaptureCandidate, error) {
+	origin, err := siteorigin.Normalize(input.Origin)
+	if err != nil {
+		return nil, directCaptureValidationError("direct_capture.origin.invalid", "direct capture origin is invalid", false, "manual_add")
+	}
+	if err := siteorigin.ValidatePublicHost(ctx, origin, nilResolverFallback{}); err != nil {
+		return nil, directCaptureValidationError("direct_capture.origin.restricted", "direct capture only supports public sites", false, "manual_add")
+	}
+	capability, ok := PlatformAuthCapabilityFor(input.Platform)
+	if !ok || !model.IsManagedSitePlatform(input.Platform) {
+		return nil, newSitePlatformIncompatibleError(input.Platform).WithStage("platform_detection").WithRetryable(false).WithSuggestedAction("manual_add")
+	}
+	accessToken := strings.TrimSpace(input.AccessToken)
+	refreshToken := strings.TrimSpace(input.RefreshToken)
+	identityLabel := strings.TrimSpace(input.IdentityLabel)
+	if accessToken == "" || len(accessToken) > DirectCaptureMaxCredentialLength || len(refreshToken) > DirectCaptureMaxCredentialLength || len(identityLabel) > 256 {
+		return nil, directCaptureValidationError("direct_capture.candidate.invalid", "candidate credential fields are missing or too large", false, "restart_capture")
+	}
+	if len(input.Evidence) == 0 || len(input.Evidence) > DirectCaptureMaxEvidenceItems {
+		return nil, directCaptureValidationError("platform.variant.inconclusive", "platform evidence is incomplete", false, "manual_add")
+	}
+	if input.PlatformUserID != nil && *input.PlatformUserID <= 0 {
+		return nil, directCaptureValidationError("direct_capture.identity.invalid", "platform user id must be positive", false, "login_again")
+	}
+	for _, required := range capability.RequiredFields {
+		if required == CredentialFieldPlatformUserID && input.PlatformUserID == nil {
+			return nil, directCaptureValidationError("direct_capture.identity.required", "platform user id is required", false, "login_again")
+		}
+	}
+
+	browserEvidence, err := validateDirectCaptureEvidence(input.Platform, input.Evidence)
+	if err != nil {
+		return nil, err
+	}
+	profile, err := probeDirectCaptureProfile(ctx, origin, input.Platform, accessToken, input.PlatformUserID, capability.ValidationProbe.Paths)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyDirectCaptureServerEvidence(ctx, origin, input.Platform, profile); err != nil {
+		return nil, err
+	}
+	verifiedUserID := anyRouterExtractUserID(profile.Payload)
+	if input.PlatformUserID != nil && verifiedUserID > 0 && verifiedUserID != *input.PlatformUserID {
+		return nil, directCaptureValidationError("direct_capture.identity.conflict", "authenticated user id does not match the candidate", false, "login_again")
+	}
+	if capability.ValidationProbe.RequiresUserID && verifiedUserID <= 0 && input.PlatformUserID == nil {
+		return nil, directCaptureValidationError("direct_capture.identity.required", "authenticated user id could not be verified", false, "login_again")
+	}
+	if input.PlatformUserID == nil && verifiedUserID > 0 {
+		input.PlatformUserID = cloneInt(&verifiedUserID)
+	}
+
+	evidenceCodes := append(browserEvidence, "server.authenticated_profile."+string(input.Platform))
+	return &ValidatedDirectCaptureCandidate{
+		Origin:          origin,
+		Platform:        input.Platform,
+		AccessToken:     accessToken,
+		RefreshToken:    refreshToken,
+		TokenExpiresAt:  input.TokenExpiresAt,
+		PlatformUserID:  cloneInt(input.PlatformUserID),
+		IdentityLabel:   identityLabel,
+		AccessTokenMask: maskRecoverySecret(accessToken),
+		EvidenceCodes:   evidenceCodes,
+	}, nil
+}
+
+func validateDirectCaptureEvidence(platform model.SitePlatform, evidence []DirectCaptureEvidence) ([]string, error) {
+	seen := make(map[string]struct{}, len(evidence))
+	result := make([]string, 0, len(evidence))
+	for _, item := range evidence {
+		code := strings.TrimSpace(item.Code)
+		if code == "" || len(code) > 128 || len(item.Value) > 256 {
+			return nil, directCaptureValidationError("platform.evidence.invalid", "platform evidence is invalid", false, "restart_capture")
+		}
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		seen[code] = struct{}{}
+		result = append(result, code)
+		if strings.HasPrefix(code, "browser.conflict.") {
+			return nil, directCaptureValidationError("platform.evidence.conflict", "browser platform evidence conflicts", false, "manual_add")
+		}
+	}
+	strongCode := "browser.strong.status_schema." + string(platform)
+	if _, ok := seen[strongCode]; ok {
+		return result, nil
+	}
+	mediumCodes := map[model.SitePlatform][]string{
+		model.SitePlatformSub2API: {
+			"browser.medium.storage.sub2api_token_pair",
+			"browser.medium.auth_profile.sub2api",
+		},
+		model.SitePlatformAnyRouter: {
+			"browser.medium.auth_profile.anyrouter",
+			"browser.medium.identity.linuxdo_numeric",
+		},
+	}
+	required := mediumCodes[platform]
+	if len(required) != 2 {
+		return nil, directCaptureValidationError("platform.variant.inconclusive", "platform variant could not be confirmed", false, "manual_add")
+	}
+	for _, code := range required {
+		if _, ok := seen[code]; !ok {
+			return nil, directCaptureValidationError("platform.variant.inconclusive", "platform variant could not be confirmed", false, "manual_add")
+		}
+	}
+	return result, nil
+}
+
+func probeDirectCaptureProfile(ctx context.Context, origin string, platform model.SitePlatform, accessToken string, userID *int, paths []string) (directCaptureProfile, error) {
+	client := directCaptureHTTPClient(origin)
+	var lastErr error
+	for _, path := range paths {
+		if !strings.Contains(path, "user") && !strings.Contains(path, "profile") {
+			continue
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, buildSiteURL(origin, path), nil)
+		if err != nil {
+			return directCaptureProfile{}, err
+		}
+		request.Header.Set("Accept", "application/json")
+		request.Header.Set("Authorization", ensureBearer(accessToken))
+		if userID != nil {
+			request.Header.Set("New-API-User", fmt.Sprintf("%d", *userID))
+		}
+		if platform == model.SitePlatformAnyRouter {
+			if strings.Contains(accessToken, "=") {
+				request.Header.Set("Cookie", accessToken)
+			} else {
+				request.Header.Set("Cookie", "session="+accessToken)
+			}
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 64*1024+1))
+		response.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if len(body) > 64*1024 {
+			return directCaptureProfile{}, directCaptureValidationError("direct_capture.upstream.too_large", "upstream validation response is too large", false, "manual_add")
+		}
+		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+			lastErr = directCaptureValidationError("direct_capture.auth.invalid", "candidate authentication failed", false, "login_again")
+			continue
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			lastErr = directCaptureValidationError("direct_capture.upstream.failed", "upstream validation failed", response.StatusCode >= 500, "retry")
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			lastErr = err
+			continue
+		}
+		return directCaptureProfile{Path: path, Payload: payload}, nil
+	}
+	if appError, ok := lastErr.(*apperror.Error); ok {
+		return directCaptureProfile{}, appError
+	}
+	return directCaptureProfile{}, directCaptureValidationError("direct_capture.upstream.unreachable", "unable to validate the candidate with the upstream site", true, "retry")
+}
+
+func verifyDirectCaptureServerEvidence(ctx context.Context, origin string, platform model.SitePlatform, profile directCaptureProfile) error {
+	switch platform {
+	case model.SitePlatformNewAPI, model.SitePlatformOneAPI, model.SitePlatformOneHub, model.SitePlatformDoneHub:
+		statusPlatform, err := probeDirectCaptureStatusPlatform(ctx, origin)
+		if err != nil {
+			return err
+		}
+		if statusPlatform == "" {
+			return directCaptureValidationError("platform.variant.inconclusive", "server could not confirm the platform variant", false, "manual_add")
+		}
+		if statusPlatform != platform {
+			return directCaptureValidationError("platform.evidence.conflict", "browser and server platform evidence conflict", false, "manual_add")
+		}
+	case model.SitePlatformSub2API:
+		if !strings.Contains(profile.Path, "profile") || !hasDirectCaptureIdentity(profile.Payload) {
+			return directCaptureValidationError("platform.variant.inconclusive", "server could not confirm Sub2API profile schema", false, "manual_add")
+		}
+	case model.SitePlatformAnyRouter:
+		username := directCaptureString(profile.Payload, "username")
+		if !strings.HasPrefix(strings.ToLower(username), "linuxdo_") || anyRouterExtractUserID(profile.Payload) <= 0 {
+			return directCaptureValidationError("platform.variant.inconclusive", "server could not confirm AnyRouter identity schema", false, "manual_add")
+		}
+	default:
+		return directCaptureValidationError("platform.variant.inconclusive", "server could not confirm the platform variant", false, "manual_add")
+	}
+	return nil
+}
+
+func probeDirectCaptureStatusPlatform(ctx context.Context, origin string) (model.SitePlatform, error) {
+	client := directCaptureHTTPClient(origin)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, buildSiteURL(origin, "/api/status"), nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Accept", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		return "", directCaptureValidationError("direct_capture.upstream.unreachable", "unable to verify platform status", true, "retry")
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", directCaptureValidationError("platform.variant.inconclusive", "platform status endpoint was not available", false, "manual_add")
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 64*1024+1))
+	if err != nil || len(body) > 64*1024 {
+		return "", directCaptureValidationError("direct_capture.upstream.too_large", "platform status response is invalid", false, "manual_add")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", directCaptureValidationError("platform.variant.inconclusive", "platform status response is invalid", false, "manual_add")
+	}
+	return classifyDirectCaptureStatus(payload), nil
+}
+
+func directCaptureHTTPClient(origin string) *http.Client {
+	client := siteorigin.NewPublicHTTPClient(10 * time.Second)
+	checkPublicRedirect := client.CheckRedirect
+	client.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		redirectOrigin, err := siteorigin.Normalize(request.URL.String())
+		if err != nil {
+			return err
+		}
+		if redirectOrigin != origin {
+			return fmt.Errorf("direct capture validation redirect changed origin")
+		}
+		return checkPublicRedirect(request, via)
+	}
+	return client
+}
+
+func classifyDirectCaptureStatus(payload map[string]any) model.SitePlatform {
+	data := payload
+	if nested, ok := payload["data"].(map[string]any); ok {
+		data = nested
+	}
+	type signature struct {
+		platform  model.SitePlatform
+		required  []string
+		forbidden []string
+	}
+	signatures := []signature{
+		{model.SitePlatformNewAPI, []string{"quota_display_type", "passkey_login", "setup"}, nil},
+		{model.SitePlatformDoneHub, []string{"linuxDo_oauth", "user_agreement_enabled", "max_log_query_days"}, nil},
+		{model.SitePlatformOneHub, []string{"oidc_auth", "language", "EnableSafe", "UptimeDomain"}, []string{"linuxDo_oauth", "max_log_query_days"}},
+		{model.SitePlatformOneAPI, []string{"oidc", "oidc_well_known", "oidc_token_endpoint"}, []string{"oidc_auth", "quota_display_type"}},
+	}
+	var matched model.SitePlatform
+	for _, candidate := range signatures {
+		valid := true
+		for _, key := range candidate.required {
+			if _, ok := data[key]; !ok {
+				valid = false
+				break
+			}
+		}
+		for _, key := range candidate.forbidden {
+			if _, ok := data[key]; ok {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			continue
+		}
+		if matched != "" {
+			return ""
+		}
+		matched = candidate.platform
+	}
+	return matched
+}
+
+func hasDirectCaptureIdentity(payload map[string]any) bool {
+	return anyRouterExtractUserID(payload) > 0 || directCaptureString(payload, "username") != "" || directCaptureString(payload, "email") != ""
+}
+
+func directCaptureString(payload map[string]any, key string) string {
+	if value, ok := payload[key].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	for _, nestedKey := range []string{"data", "user", "profile"} {
+		if nested, ok := payload[nestedKey].(map[string]any); ok {
+			if value := directCaptureString(nested, key); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+type nilResolverFallback struct{}
+
+func (nilResolverFallback) LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error) {
+	return net.DefaultResolver.LookupNetIP(ctx, network, host)
+}
+
+func directCaptureValidationError(code, message string, retryable bool, action string) *apperror.Error {
+	return apperror.New(code, message).
+		WithStatus(http.StatusBadRequest).
+		WithStage("candidate_validation").
+		WithRetryable(retryable).
+		WithSuggestedAction(action)
+}

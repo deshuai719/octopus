@@ -1,8 +1,10 @@
 package middleware
 
 import (
+	"strings"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/requestmeta"
 	"github.com/bestruirui/octopus/internal/utils/log"
 	"github.com/gin-gonic/gin"
 )
@@ -18,7 +20,7 @@ func Logger(cfg LoggerConfig) gin.HandlerFunc {
 	}
 	return func(c *gin.Context) {
 		start := time.Now()
-		path := c.Request.URL.Path
+		path := accessLogPath(c.Request.URL.Path)
 		query := c.Request.URL.RawQuery
 		c.Next()
 
@@ -30,6 +32,7 @@ func Logger(cfg LoggerConfig) gin.HandlerFunc {
 		}
 
 		fields := []interface{}{
+			"operation_id", requestmeta.GinOperationID(c),
 			"method", c.Request.Method,
 			"path", path,
 			"status", status,
@@ -57,4 +60,20 @@ func Logger(cfg LoggerConfig) gin.HandlerFunc {
 			}
 		}
 	}
+}
+
+func accessLogPath(path string) string {
+	const prefix = "/api/v1/site/direct-capture/"
+	if !strings.HasPrefix(path, prefix) {
+		return path
+	}
+	remainder := strings.TrimPrefix(path, prefix)
+	if remainder == "" || remainder == "preview" {
+		return path
+	}
+	parts := strings.SplitN(remainder, "/", 2)
+	if len(parts) == 1 {
+		return prefix + ":capture_id"
+	}
+	return prefix + ":capture_id/" + parts[1]
 }

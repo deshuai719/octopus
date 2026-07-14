@@ -496,9 +496,10 @@ export function SiteEditDialog({ open, onOpenChange, site, onCreated, allTags }:
                                     setSiteForm((current) => ({ ...current, tags }))
                                 }
                                 suggestions={allTags}
+                                showBillingTagShortcuts
                             />
                             <span className="text-xs text-muted-foreground">
-                                可选：为站点打标签，便于在列表中分类筛选。
+                                可选：公益 / 付费互斥，其他自定义标签可多选，便于在列表中分类筛选。
                             </span>
                         </label>
 

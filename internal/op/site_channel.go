@@ -361,6 +361,11 @@ func newSiteChannelGroupView(groupKey string, groupName string, group model.Site
 		unix := group.LastModelSyncSuccessAt.UnixMilli()
 		lastModelSyncSuccessAt = &unix
 	}
+	var ratioLastSeenAt *int64
+	if group.RatioLastSeenAt != nil && !group.RatioLastSeenAt.IsZero() {
+		unix := group.RatioLastSeenAt.UnixMilli()
+		ratioLastSeenAt = &unix
+	}
 	status := group.ModelSyncStatus
 	if status == "" {
 		status = model.SiteGroupModelSyncStatusIdle
@@ -368,6 +373,9 @@ func newSiteChannelGroupView(groupKey string, groupName string, group model.Site
 	return &model.SiteChannelGroup{
 		GroupKey:                groupKey,
 		GroupName:               groupName,
+		Ratio:                   group.Ratio,
+		CompletionRatio:         group.CompletionRatio,
+		RatioLastSeenAt:         ratioLastSeenAt,
 		ProjectionDisabled:      group.ProjectionDisabled,
 		ProjectionSuspended:     group.ProjectionSuspended,
 		ProjectionSuspendReason: group.ProjectionSuspendReason,

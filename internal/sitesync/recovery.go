@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +16,7 @@ import (
 	"github.com/bestruirui/octopus/internal/apperror"
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/siteorigin"
 	"gorm.io/gorm"
 )
 
@@ -550,11 +550,7 @@ func accountCredentialVersion(account *model.SiteAccount) [32]byte {
 }
 
 func siteOrigin(rawURL string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
-		return "", fmt.Errorf("invalid site origin")
-	}
-	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host), nil
+	return siteorigin.Normalize(rawURL)
 }
 
 func randomRecoveryValue(size int) (string, error) {

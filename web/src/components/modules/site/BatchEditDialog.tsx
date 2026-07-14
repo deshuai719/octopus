@@ -178,7 +178,11 @@ export function BatchEditDialog({
                                 value={addTags}
                                 onChange={setAddTags}
                                 suggestions={allTagNames}
+                                showBillingTagShortcuts
                             />
+                            <p className="text-xs text-muted-foreground">
+                                批量添加公益 / 付费时会自动替换另一类互斥标签，其他自定义标签仍可多选。
+                            </p>
                         </div>
                         <div className="space-y-1.5">
                             <label className="text-sm font-medium text-card-foreground">

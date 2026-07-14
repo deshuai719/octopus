@@ -27,3 +27,32 @@ func TestAllowRecoveryExtensionOriginIsScopedToCandidateRoute(t *testing.T) {
 		})
 	}
 }
+
+func TestAllowRecoveryExtensionOriginIsScopedToDirectCaptureRoutes(t *testing.T) {
+	allowed := []string{
+		"/api/v1/user/status",
+		"/api/v1/site/direct-capture/preview",
+		"/api/v1/site/direct-capture/capture-id",
+		"/api/v1/site/direct-capture/capture-id/confirm",
+	}
+	for _, path := range allowed {
+		if !allowRecoveryExtensionOrigin(path, RecoveryExtensionOrigin) {
+			t.Fatalf("expected direct capture CORS allowance for %q", path)
+		}
+	}
+	denied := []string{
+		"/api/v1/site/list",
+		"/api/v1/site/create",
+		"/api/v1/site/account/1/auth-recovery",
+		"/api/v1/user/login",
+		"/api/v1/site/direct-capturex/preview",
+	}
+	for _, path := range denied {
+		if allowRecoveryExtensionOrigin(path, RecoveryExtensionOrigin) {
+			t.Fatalf("unexpected direct capture CORS allowance for %q", path)
+		}
+	}
+	if allowRecoveryExtensionOrigin("/api/v1/site/direct-capture/preview", "https://example.com") {
+		t.Fatal("ordinary web origin was allowed to use direct capture CORS")
+	}
+}

@@ -35,6 +35,7 @@ func Start() error {
 	}
 
 	r := gin.New()
+	r.Use(middleware.OperationID())
 	r.Use(gin.CustomRecovery(func(c *gin.Context, recovered interface{}) {
 		log.Errorf("http panic recovered: %v", recovered)
 		resp.Error(c, http.StatusInternalServerError, resp.ErrInternalServer)

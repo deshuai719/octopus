@@ -128,6 +128,7 @@ func fetchSub2APIGroups(ctx context.Context, siteRecord *model.Site, account *mo
 		}
 		items := parseGroupItemsFromAny(data)
 		if len(items) > 0 {
+			items = applySub2APIGroupRateOverrides(ctx, siteRecord, account, accessToken, items)
 			return items, nil
 		}
 	}
@@ -138,6 +139,62 @@ func fetchSub2APIGroups(ctx context.Context, siteRecord *model.Site, account *mo
 		return nil, firstErr
 	}
 	return []model.SiteUserGroup{{GroupKey: model.SiteDefaultGroupKey, Name: model.SiteDefaultGroupName}}, nil
+}
+
+func applySub2APIGroupRateOverrides(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, accessToken string, groups []model.SiteUserGroup) []model.SiteUserGroup {
+	overrides, err := fetchSub2APIGroupRateOverrides(ctx, siteRecord, account, accessToken)
+	if err != nil || len(overrides) == 0 {
+		return groups
+	}
+	for i := range groups {
+		key := model.NormalizeSiteGroupKey(groups[i].GroupKey)
+		if ratio, ok := overrides[key]; ok {
+			groups[i].Ratio = &ratio
+		}
+	}
+	return groups
+}
+
+func fetchSub2APIGroupRateOverrides(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, accessToken string) (map[string]float64, error) {
+	payload, err := requestJSON(ctx, siteRecord, "GET", buildSiteURL(siteRecord.BaseURL, "/api/v1/groups/rates"), nil, map[string]string{"Authorization": ensureBearer(accessToken)}, account)
+	if err != nil {
+		return nil, err
+	}
+	data, err := unwrapSub2APIData(payload, "/api/v1/groups/rates")
+	if err != nil {
+		data = payload
+	}
+	rates := make(map[string]float64)
+	collectSub2APIGroupRateOverrides(data, rates)
+	return rates, nil
+}
+
+func collectSub2APIGroupRateOverrides(data any, rates map[string]float64) {
+	if rates == nil {
+		return
+	}
+	switch typed := data.(type) {
+	case map[string]any:
+		for rawKey, rawValue := range typed {
+			if isIgnorableGroupMapKey(rawKey) {
+				if nested, ok := rawValue.(map[string]any); ok {
+					collectSub2APIGroupRateOverrides(nested, rates)
+				}
+				continue
+			}
+			key := model.NormalizeSiteGroupKey(rawKey)
+			ratio := optionalJSONFloat(rawValue)
+			if ratio == nil {
+				if nested, ok := rawValue.(map[string]any); ok {
+					ratio = optionalJSONFloat(firstPresentValue(nested, "ratio", "rate_multiplier", "rateMultiplier", "rate"))
+				}
+			}
+			if ratio == nil {
+				continue
+			}
+			rates[key] = *ratio
+		}
+	}
 }
 
 func unwrapSub2APIData(payload map[string]any, endpoint string) (any, error) {

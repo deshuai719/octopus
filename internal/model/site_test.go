@@ -23,6 +23,22 @@ func TestNormalizeComparableSiteTokenValue(t *testing.T) {
 	}
 }
 
+func TestNormalizeSiteTagsUsesLastExclusiveBillingTag(t *testing.T) {
+	tags := NormalizeSiteTags([]string{SiteTagPublic, " prod ", SiteTagPaid, "prod"})
+
+	if len(tags) != 2 || tags[0] != SiteTagPaid || tags[1] != "prod" {
+		t.Fatalf("expected normalized tags [付费 prod], got %#v", tags)
+	}
+}
+
+func TestNormalizeSiteTagsForRemovalKeepsExclusiveBillingTagSet(t *testing.T) {
+	tags := NormalizeSiteTagsForRemoval([]string{SiteTagPublic, SiteTagPaid, SiteTagPublic, " prod "})
+
+	if len(tags) != 3 || tags[0] != SiteTagPublic || tags[1] != SiteTagPaid || tags[2] != "prod" {
+		t.Fatalf("expected removal tags [公益 付费 prod], got %#v", tags)
+	}
+}
+
 func TestSiteMaskedTokenMatchesRequiresHiddenCharacter(t *testing.T) {
 	if SiteMaskedTokenMatches("abcdef", "abc***def") {
 		t.Fatalf("expected token with no hidden characters to be rejected")

@@ -8,6 +8,7 @@ import (
 	"github.com/bestruirui/octopus/internal/apperror"
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/siteauth"
 )
 
 type accountAuthFailureTransition struct {
@@ -107,15 +108,7 @@ func recordAccountAuthSuccess(ctx context.Context, account *model.SiteAccount) e
 }
 
 func accountAuthSuccessUpdates(now time.Time) map[string]any {
-	return map[string]any{
-		"auth_status":               model.SiteAuthStatusValid,
-		"auth_failure_code":         "",
-		"auth_failure_message":      "",
-		"auth_failure_stage":        "",
-		"consecutive_auth_failures": 0,
-		"last_auth_success_at":      &now,
-		"reauth_notified_at":        nil,
-	}
+	return siteauth.SuccessUpdates(now)
 }
 
 func applyAccountAuthSuccess(account *model.SiteAccount, now time.Time) {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/bestruirui/octopus/internal/client"
@@ -338,7 +339,11 @@ func parseGroupCandidate(candidate any) []model.SiteUserGroup {
 			if value, ok := raw.(string); ok {
 				name = firstNonEmptyString(value, key)
 			} else if item, ok := raw.(map[string]any); ok {
-				name = firstNonEmptyString(jsonString(item["name"]), jsonString(item["group_name"]), jsonString(item["groupName"]), jsonString(item["title"]), jsonString(item["label"]), key)
+				name = firstNonEmptyString(jsonString(item["name"]), jsonString(item["group_name"]), jsonString(item["groupName"]), jsonString(item["title"]), jsonString(item["label"]), jsonString(item["desc"]), jsonString(item["description"]), key)
+				group := model.SiteUserGroup{GroupKey: key, Name: name}
+				applyGroupRatioFields(&group, item)
+				items = append(items, group)
+				continue
 			}
 			items = append(items, model.SiteUserGroup{GroupKey: key, Name: name})
 		}
@@ -370,7 +375,70 @@ func parseGroupObject(item map[string]any) (model.SiteUserGroup, bool) {
 	if strings.TrimSpace(groupKey) == "" {
 		return model.SiteUserGroup{}, false
 	}
-	return model.SiteUserGroup{GroupKey: strings.TrimSpace(groupKey), Name: strings.TrimSpace(groupName)}, true
+	group := model.SiteUserGroup{GroupKey: strings.TrimSpace(groupKey), Name: strings.TrimSpace(groupName)}
+	applyGroupRatioFields(&group, item)
+	return group, true
+}
+
+func applyGroupRatioFields(group *model.SiteUserGroup, item map[string]any) {
+	if group == nil || item == nil {
+		return
+	}
+	group.Ratio = optionalJSONFloat(firstPresentValue(item,
+		"ratio",
+		"group_ratio",
+		"groupRatio",
+		"rate_multiplier",
+		"rateMultiplier",
+		"rate",
+	))
+	group.CompletionRatio = optionalJSONFloat(firstPresentValue(item,
+		"completion_ratio",
+		"completionRatio",
+		"completion_rate",
+		"completionRate",
+		"completion",
+	))
+}
+
+func firstPresentValue(item map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if value, ok := item[key]; ok {
+			return value
+		}
+	}
+	return nil
+}
+
+func optionalJSONFloat(value any) *float64 {
+	switch typed := value.(type) {
+	case float64:
+		return &typed
+	case int:
+		parsed := float64(typed)
+		return &parsed
+	case int64:
+		parsed := float64(typed)
+		return &parsed
+	case json.Number:
+		parsed, err := typed.Float64()
+		if err != nil {
+			return nil
+		}
+		return &parsed
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return nil
+		}
+		parsed, err := strconv.ParseFloat(trimmed, 64)
+		if err != nil {
+			return nil
+		}
+		return &parsed
+	default:
+		return nil
+	}
 }
 
 func isIgnorableGroupMapKey(key string) bool {

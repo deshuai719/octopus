@@ -12,13 +12,14 @@ import (
 const RecoveryExtensionOrigin = "chrome-extension://hcnomejlhhefpnhljgcclhggoljokimn"
 
 const recoveryCandidatePathPrefix = "/api/v1/site/auth-recovery/"
+const directCapturePathPrefix = "/api/v1/site/direct-capture/"
 
 func Cors() gin.HandlerFunc {
 	config := cors.DefaultConfig()
 	config.AllowCredentials = true
 	config.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
 	config.AllowHeaders = []string{"*"}
-	config.ExposeHeaders = []string{"Content-Disposition"}
+	config.ExposeHeaders = []string{"Content-Disposition", "X-Octopus-Operation-ID", "X-Octopus-Direct-Capture-Version"}
 	// CORS 白名单:
 	// - 为空: 不允许跨域
 	// - "*": 允许所有来源
@@ -68,7 +69,13 @@ func Cors() gin.HandlerFunc {
 }
 
 func allowRecoveryExtensionOrigin(path string, origin string) bool {
-	if origin != RecoveryExtensionOrigin || !strings.HasPrefix(path, recoveryCandidatePathPrefix) || !strings.HasSuffix(path, "/candidate") {
+	if origin != RecoveryExtensionOrigin {
+		return false
+	}
+	if path == "/api/v1/user/status" || path == "/api/v1/site/direct-capture/preview" || strings.HasPrefix(path, directCapturePathPrefix) {
+		return true
+	}
+	if !strings.HasPrefix(path, recoveryCandidatePathPrefix) || !strings.HasSuffix(path, "/candidate") {
 		return false
 	}
 	sessionID := strings.TrimSuffix(strings.TrimPrefix(path, recoveryCandidatePathPrefix), "/candidate")

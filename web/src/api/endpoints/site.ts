@@ -49,6 +49,9 @@ export type SiteUserGroup = {
   group_key: string;
   name: string;
   raw_payload?: string | null;
+  ratio?: number | null;
+  completion_ratio?: number | null;
+  ratio_last_seen_at?: string | null;
   projection_disabled?: boolean;
   projection_suspended?: boolean;
   projection_suspend_reason?: string;

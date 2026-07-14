@@ -11,6 +11,7 @@ import (
 
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/siteorigin"
 	"gorm.io/gorm"
 )
 
@@ -626,8 +627,19 @@ func parseAllAPIHubProfile(profile rawImportObject) (importedAccountInput, strin
 func upsertImportedSite(tx *gorm.DB, input importedSiteInput) (*model.Site, bool, error) {
 	normalizedBaseURL := normalizeImportBaseURL(input.BaseURL)
 	var siteRecord model.Site
-	err := tx.Where("platform = ? AND base_url = ?", input.Platform, normalizedBaseURL).First(&siteRecord).Error
+	query := tx.Where("platform = ? AND base_url = ?", input.Platform, normalizedBaseURL)
+	if model.IsManagedSitePlatform(input.Platform) {
+		canonicalOrigin, err := siteorigin.Normalize(normalizedBaseURL)
+		if err != nil {
+			return nil, false, err
+		}
+		query = tx.Where("canonical_origin = ?", canonicalOrigin)
+	}
+	err := query.First(&siteRecord).Error
 	if err == nil {
+		if siteRecord.Platform != input.Platform {
+			return nil, false, siteOriginConflictError()
+		}
 		return &siteRecord, false, nil
 	}
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -644,7 +656,7 @@ func upsertImportedSite(tx *gorm.DB, input importedSiteInput) (*model.Site, bool
 		return nil, false, err
 	}
 	if err := tx.Create(&siteRecord).Error; err != nil {
-		return nil, false, fmt.Errorf("create site failed: %w", err)
+		return nil, false, normalizeSiteOriginConflictError(err)
 	}
 	return &siteRecord, true, nil
 }

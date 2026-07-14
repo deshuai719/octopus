@@ -28,7 +28,14 @@ func TestSyncSub2APIUsesManagedKeyAndAPIModelEndpoint(t *testing.T) {
 				_, _ = w.Write([]byte(`{"message":"unauthorized"}`))
 				return
 			}
-			_, _ = w.Write([]byte(`{"code":0,"data":{"groups":[{"id":7,"name":"vip"}]}}`))
+			_, _ = w.Write([]byte(`{"code":0,"data":{"groups":[{"id":7,"name":"vip","rate_multiplier":1.5}]}}`))
+		case "/api/v1/groups/rates":
+			if r.Header.Get("Authorization") != "Bearer sub2-session-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"message":"unauthorized"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":{"7":0.75}}`))
 		case "/v1/models":
 			http.NotFound(w, r)
 		case "/api/v1/models":
@@ -62,6 +69,9 @@ func TestSyncSub2APIUsesManagedKeyAndAPIModelEndpoint(t *testing.T) {
 	}
 	if len(snapshot.groups) != 1 || snapshot.groups[0].GroupKey != "7" || snapshot.groups[0].Name != "vip" {
 		t.Fatalf("expected parsed group 7/vip, got %+v", snapshot.groups)
+	}
+	if snapshot.groups[0].Ratio == nil || *snapshot.groups[0].Ratio != 0.75 {
+		t.Fatalf("expected parsed group ratio overridden to 0.75, got %+v", snapshot.groups[0])
 	}
 	if len(snapshot.models) != 2 {
 		t.Fatalf("expected models discovered from /api/v1/models, got %+v", snapshot.models)
