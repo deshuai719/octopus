@@ -551,6 +551,9 @@ func SiteAccountUpdate(req *model.SiteAccountUpdateRequest, ctx context.Context)
 	merged := account
 	var selectFields []string
 	updates := model.SiteAccount{ID: req.ID}
+	credentialsChanged := req.CredentialType != nil || req.Username != nil || req.Password != nil ||
+		req.AccessToken != nil || req.APIKey != nil || req.RefreshToken != nil ||
+		req.TokenExpiresAt != nil || req.PlatformUserIDSet
 
 	if req.Name != nil {
 		merged.Name = *req.Name
@@ -624,6 +627,24 @@ func SiteAccountUpdate(req *model.SiteAccountUpdateRequest, ctx context.Context)
 		merged.CheckinRandomWindowMinutes = *req.CheckinRandomWindowMinutes
 		selectFields = append(selectFields, "checkin_random_window_minutes")
 	}
+	if credentialsChanged {
+		merged.AuthStatus = model.SiteAuthStatusUnknown
+		merged.AuthFailureCode = ""
+		merged.AuthFailureMessage = ""
+		merged.AuthFailureStage = ""
+		merged.ConsecutiveAuthFailures = 0
+		merged.LastAuthFailureAt = nil
+		merged.ReauthNotifiedAt = nil
+		selectFields = append(selectFields,
+			"auth_status",
+			"auth_failure_code",
+			"auth_failure_message",
+			"auth_failure_stage",
+			"consecutive_auth_failures",
+			"last_auth_failure_at",
+			"reauth_notified_at",
+		)
+	}
 
 	if len(selectFields) > 0 {
 		if err := merged.Validate(); err != nil {
@@ -685,6 +706,15 @@ func SiteAccountUpdate(req *model.SiteAccountUpdateRequest, ctx context.Context)
 	}
 	if req.CheckinRandomWindowMinutes != nil {
 		updates.CheckinRandomWindowMinutes = merged.CheckinRandomWindowMinutes
+	}
+	if credentialsChanged {
+		updates.AuthStatus = merged.AuthStatus
+		updates.AuthFailureCode = merged.AuthFailureCode
+		updates.AuthFailureMessage = merged.AuthFailureMessage
+		updates.AuthFailureStage = merged.AuthFailureStage
+		updates.ConsecutiveAuthFailures = merged.ConsecutiveAuthFailures
+		updates.LastAuthFailureAt = merged.LastAuthFailureAt
+		updates.ReauthNotifiedAt = merged.ReauthNotifiedAt
 	}
 
 	if len(selectFields) > 0 {
