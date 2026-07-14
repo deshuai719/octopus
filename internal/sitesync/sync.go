@@ -2,9 +2,13 @@ package sitesync
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/apperror"
 	"github.com/bestruirui/octopus/internal/model"
@@ -23,6 +27,14 @@ func isAlreadyCheckedInMessage(message string) bool {
 		strings.Contains(message, "已签到") ||
 		strings.Contains(message, "已经签到") ||
 		strings.Contains(message, "签到过")
+}
+
+func isManualCheckinVerificationMessage(message string) bool {
+	lowered := strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(lowered, "turnstile") ||
+		strings.Contains(lowered, "captcha") ||
+		strings.Contains(message, "验证码") ||
+		strings.Contains(message, "人机验证")
 }
 
 func syncAccountState(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount) (*syncSnapshot, error) {
@@ -58,9 +70,22 @@ func checkinAccountState(ctx context.Context, siteRecord *model.Site, account *m
 		if err != nil {
 			return nil, accessToken, err
 		}
-		payload, err := requestJSONWithManagedAccessToken(ctx, siteRecord, http.MethodPost, buildSiteURL(siteRecord.BaseURL, "/api/user/checkin"), nil, accessToken, account)
+		checkinHeaders := map[string]string(nil)
+		if siteRecord.Platform == model.SitePlatformNewAPI {
+			status, statusErr := fetchManagedCheckinStatus(ctx, siteRecord, account, accessToken)
+			if statusErr == nil {
+				if status.AlreadyCheckedIn {
+					return &model.SiteCheckinResult{Status: model.SiteExecutionStatusSuccess, Message: "今日已签到"}, accessToken, nil
+				}
+				checkinHeaders = buildManagedCheckinSignatureHeaders(account, status.Nonce, time.Now())
+			}
+		}
+		payload, err := requestJSONWithManagedAccessTokenHeaders(ctx, siteRecord, http.MethodPost, buildSiteURL(siteRecord.BaseURL, "/api/user/checkin"), nil, accessToken, checkinHeaders, account)
 		if err != nil {
 			lowered := strings.ToLower(err.Error())
+			if isManualCheckinVerificationMessage(err.Error()) {
+				return &model.SiteCheckinResult{Status: model.SiteExecutionStatusFailed, Message: "需要在网页完成验证码或 Turnstile 验证"}, accessToken, nil
+			}
 			if strings.Contains(lowered, "404") || strings.Contains(lowered, "not found") {
 				return &model.SiteCheckinResult{Status: model.SiteExecutionStatusSkipped, Message: "checkin is not supported by this platform"}, accessToken, nil
 			}
@@ -68,12 +93,51 @@ func checkinAccountState(ctx context.Context, siteRecord *model.Site, account *m
 		}
 		success := jsonBool(payload["success"])
 		message := firstNonEmptyString(jsonString(payload["message"]), "checkin success")
+		if !success && isManualCheckinVerificationMessage(message) {
+			return &model.SiteCheckinResult{Status: model.SiteExecutionStatusFailed, Message: "需要在网页完成验证码或 Turnstile 验证"}, accessToken, nil
+		}
 		if success || isAlreadyCheckedInMessage(message) {
 			return &model.SiteCheckinResult{Status: model.SiteExecutionStatusSuccess, Message: message, Reward: jsonString(nestedValue(payload, "data", "reward"))}, accessToken, nil
 		}
 		return &model.SiteCheckinResult{Status: model.SiteExecutionStatusFailed, Message: message}, accessToken, nil
 	default:
 		return nil, "", newUnsupportedSitePlatformError(siteRecord.Platform)
+	}
+}
+
+type managedCheckinStatus struct {
+	AlreadyCheckedIn bool
+	Nonce            string
+}
+
+func fetchManagedCheckinStatus(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, accessToken string) (managedCheckinStatus, error) {
+	payload, err := requestJSONWithManagedAccessToken(ctx, siteRecord, http.MethodGet, buildSiteURL(siteRecord.BaseURL, "/api/user/checkin"), nil, accessToken, account)
+	if err != nil {
+		return managedCheckinStatus{}, err
+	}
+	return managedCheckinStatus{
+		AlreadyCheckedIn: jsonBool(nestedValue(payload, "data", "stats", "checked_in_today")) ||
+			jsonBool(nestedValue(payload, "data", "checked_in_today")) ||
+			jsonBool(nestedValue(payload, "stats", "checked_in_today")) ||
+			jsonBool(payload["checked_in_today"]),
+		Nonce: firstNonEmptyString(
+			jsonString(nestedValue(payload, "data", "checkin_nonce")),
+			jsonString(payload["checkin_nonce"]),
+		),
+	}, nil
+}
+
+func buildManagedCheckinSignatureHeaders(account *model.SiteAccount, nonce string, now time.Time) map[string]string {
+	userID := firstManagedPlatformUserID(account)
+	nonce = strings.TrimSpace(nonce)
+	if userID <= 0 || nonce == "" {
+		return nil
+	}
+	timestamp := strconv.FormatInt(now.Unix(), 10)
+	digest := sha256.Sum256([]byte(strconv.Itoa(userID) + ":" + timestamp + ":" + nonce))
+	return map[string]string{
+		"X-Checkin-Timestamp": timestamp,
+		"X-Checkin-Signature": hex.EncodeToString(digest[:]),
 	}
 }
 

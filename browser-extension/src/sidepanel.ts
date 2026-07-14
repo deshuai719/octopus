@@ -20,6 +20,10 @@ const directPreview = document.querySelector<HTMLElement>("#direct-preview")!;
 const captureAction = document.querySelector<HTMLElement>("#capture-action")!;
 const credentialMask = document.querySelector<HTMLElement>("#credential-mask")!;
 const platformUserID = document.querySelector<HTMLElement>("#platform-user-id")!;
+const matchedSiteRow = document.querySelector<HTMLElement>("#matched-site-row")!;
+const matchedSite = document.querySelector<HTMLElement>("#matched-site")!;
+const matchedAccountRow = document.querySelector<HTMLElement>("#matched-account-row")!;
+const matchedAccount = document.querySelector<HTMLElement>("#matched-account")!;
 const siteNameField = document.querySelector<HTMLElement>("#site-name-field")!;
 const accountNameField = document.querySelector<HTMLElement>("#account-name-field")!;
 const accountResolutionField = document.querySelector<HTMLElement>("#account-resolution-field")!;
@@ -57,6 +61,12 @@ function clearDirectPreview(): void {
   accountNameField.hidden = true;
   accountResolutionField.hidden = true;
   captureWarning.hidden = true;
+  matchedSiteRow.hidden = true;
+  matchedAccountRow.hidden = true;
+  matchedSite.textContent = "—";
+  matchedAccount.textContent = "—";
+  siteNameInput.value = "";
+  accountNameInput.value = "";
   accountResolution.replaceChildren();
   manualTokenInput.value = "";
   manualTokenField.hidden = true;
@@ -104,6 +114,10 @@ function renderCapture(capture: DirectCaptureView): void {
   platformUserID.textContent = capture.candidate?.platform_user_id?.toString() ?? "未提供";
   siteNameInput.value = capture.site_name ?? "";
   accountNameInput.value = capture.candidate?.identity_label || capture.account_name || "默认账号";
+  matchedSite.textContent = capture.site_name || "—";
+  matchedSiteRow.hidden = !capture.site_name;
+  matchedAccount.textContent = capture.account_name || capture.candidate?.identity_label || "—";
+  matchedAccountRow.hidden = !(capture.account_name || capture.candidate?.identity_label);
   siteNameField.hidden = capture.action !== "create_site_account";
   accountNameField.hidden = !["create_site_account", "create_account"].includes(capture.action ?? "");
   accountResolutionField.hidden = capture.phase !== "resolution_required";
@@ -166,7 +180,10 @@ async function refreshCapturePageOrigin(): Promise<void> {
 
 function renderActiveContextResponse(response: WorkerResponse): void {
   if (response.packet) renderPacket(response.packet);
-  else if (response.capture) renderCapture(response.capture);
+  else if (response.capture) {
+    if (response.binding?.origin) apiOrigin.textContent = response.binding.origin;
+    renderCapture(response.capture);
+  }
   else if (response.mode === "binding") {
     clearPacketDisplay();
     endpoints.hidden = false;

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/bestruirui/octopus/internal/apperror"
@@ -39,9 +40,58 @@ func fetchManagementTokens(ctx context.Context, siteRecord *model.Site, account 
 		}
 		groupKey := model.NormalizeSiteGroupKey(firstNonEmptyString(jsonString(item["group"]), jsonString(item["token_group"]), jsonString(item["group_name"])))
 		groupName := model.NormalizeSiteGroupName(groupKey, firstNonEmptyString(jsonString(item["group_name"]), jsonString(item["group"]), jsonString(item["token_group"])))
-		tokens = append(tokens, model.SiteToken{Name: firstNonEmptyString(strings.TrimSpace(jsonString(item["name"])), fmt.Sprintf("token-%d", index+1)), Token: tokenValue, GroupKey: groupKey, GroupName: groupName, Enabled: parseEnabledFlag(item["status"]), Source: "sync", IsDefault: index == 0})
+		tokens = append(tokens, model.SiteToken{ExternalID: jsonInt64(item["id"]), Name: firstNonEmptyString(strings.TrimSpace(jsonString(item["name"])), fmt.Sprintf("token-%d", index+1)), Token: tokenValue, GroupKey: groupKey, GroupName: groupName, Enabled: parseEnabledFlag(item["status"]), Source: "sync", IsDefault: index == 0})
 	}
+	revealManagementTokenValues(ctx, siteRecord, account, accessToken, tokens)
 	return tokens, nil
+}
+
+func revealManagementTokenValues(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, accessToken string, tokens []model.SiteToken) {
+	ids := make([]int64, 0, len(tokens))
+	for _, token := range tokens {
+		if token.ExternalID > 0 && model.IsMaskedSiteTokenValue(token.Token) {
+			ids = append(ids, token.ExternalID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+
+	fullValues := make(map[int64]string, len(ids))
+	payload, err := requestJSONWithManagedAccessToken(ctx, siteRecord, http.MethodPost, buildSiteURL(siteRecord.BaseURL, "/api/token/batch/keys"), map[string]any{"ids": ids}, accessToken, account)
+	if err == nil {
+		if values, ok := nestedValue(payload, "data", "keys").(map[string]any); ok {
+			for rawID, rawValue := range values {
+				id, parseErr := strconv.ParseInt(rawID, 10, 64)
+				value := strings.TrimSpace(jsonString(rawValue))
+				if parseErr == nil && id > 0 && value != "" && !model.IsMaskedSiteTokenValue(value) {
+					fullValues[id] = value
+				}
+			}
+		}
+	}
+
+	for index := range tokens {
+		token := &tokens[index]
+		if value := fullValues[token.ExternalID]; value != "" {
+			token.Token = value
+			token.ValueStatus = model.SiteTokenValueStatusReady
+			continue
+		}
+		if token.ExternalID <= 0 || !model.IsMaskedSiteTokenValue(token.Token) {
+			continue
+		}
+		payload, revealErr := requestJSONWithManagedAccessToken(ctx, siteRecord, http.MethodPost, buildSiteURL(siteRecord.BaseURL, fmt.Sprintf("/api/token/%d/key", token.ExternalID)), nil, accessToken, account)
+		if revealErr != nil {
+			continue
+		}
+		value := firstNonEmptyString(jsonString(nestedValue(payload, "data", "key")), jsonString(payload["key"]))
+		if value == "" || model.IsMaskedSiteTokenValue(value) {
+			continue
+		}
+		token.Token = value
+		token.ValueStatus = model.SiteTokenValueStatusReady
+	}
 }
 
 func fetchManagementGroups(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, accessToken string) ([]model.SiteUserGroup, error) {
@@ -259,13 +309,14 @@ func buildSub2APITokensFromItems(items []map[string]any) []model.SiteToken {
 			jsonString(item["tokenGroup"]),
 		))
 		tokens = append(tokens, model.SiteToken{
-			Name:      firstNonEmptyString(strings.TrimSpace(jsonString(item["name"])), fmt.Sprintf("token-%d", index+1)),
-			Token:     tokenValue,
-			GroupKey:  groupKey,
-			GroupName: groupName,
-			Enabled:   parseSub2APITokenEnabled(item),
-			Source:    "sync",
-			IsDefault: index == 0,
+			ExternalID: jsonInt64(item["id"]),
+			Name:       firstNonEmptyString(strings.TrimSpace(jsonString(item["name"])), fmt.Sprintf("token-%d", index+1)),
+			Token:      tokenValue,
+			GroupKey:   groupKey,
+			GroupName:  groupName,
+			Enabled:    parseSub2APITokenEnabled(item),
+			Source:     "sync",
+			IsDefault:  index == 0,
 		})
 	}
 	return tokens

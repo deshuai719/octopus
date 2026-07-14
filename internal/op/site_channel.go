@@ -203,6 +203,7 @@ func buildSiteChannelGroups(ctx context.Context, site model.Site, account model.
 		}
 		group.SourceKeys = append(group.SourceKeys, model.SiteSourceKey{
 			ID:          token.ID,
+			ExternalID:  token.ExternalID,
 			Enabled:     token.Enabled,
 			Token:       token.Token,
 			TokenMasked: maskProjectedChannelKey(token.Token),

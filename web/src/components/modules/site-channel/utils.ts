@@ -57,11 +57,14 @@ export type SiteModelView = SiteChannelModel & {
 
 export type SiteSourceKeyFormItem = {
     id?: number;
+    external_id?: number;
     enabled: boolean;
     token: string;
     token_masked?: string;
     is_new?: boolean;
     name: string;
+    group_key: string;
+    group_name?: string;
     value_status?: 'ready' | 'masked_pending';
     last_sync_at?: number | null;
 };
@@ -289,10 +292,13 @@ export function buildSourceKeyFormItems(group: SiteChannelGroup): SiteSourceKeyF
 
     return group.source_keys.map((key) => ({
         id: key.id,
+        external_id: key.external_id,
         enabled: key.enabled,
         token: key.token,
         token_masked: key.token_masked,
         name: key.name ?? '',
+        group_key: key.group_key || group.group_key,
+        group_name: key.group_name || group.group_name,
         value_status: key.value_status,
         last_sync_at: key.last_sync_at ?? null,
     }));

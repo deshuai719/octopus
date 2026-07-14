@@ -391,6 +391,20 @@ func mergePersistedSiteTokens(accountID int, existingTokens []model.SiteToken, i
 func mergeReadyIncomingSiteToken(incoming model.SiteToken, existingTokens []model.SiteToken, usedExistingIDs map[int]struct{}) model.SiteToken {
 	incoming.ValueStatus = model.SiteTokenValueStatusReady
 	for _, existing := range existingTokens {
+		if incoming.ExternalID <= 0 || existing.ExternalID != incoming.ExternalID {
+			continue
+		}
+		if existing.ID != 0 {
+			if _, used := usedExistingIDs[existing.ID]; used {
+				continue
+			}
+			usedExistingIDs[existing.ID] = struct{}{}
+		}
+		incoming.ID = existing.ID
+		incoming.Enabled = existing.Enabled
+		return incoming
+	}
+	for _, existing := range existingTokens {
 		if existing.ID != 0 {
 			if _, used := usedExistingIDs[existing.ID]; used {
 				continue
@@ -441,6 +455,24 @@ func mergeReadyIncomingSiteToken(incoming model.SiteToken, existingTokens []mode
 
 func mergeMaskedIncomingSiteToken(incoming model.SiteToken, existingTokens []model.SiteToken, readyCandidates []model.SiteToken, usedExistingIDs map[int]struct{}) model.SiteToken {
 	incoming.ValueStatus = model.SiteTokenValueStatusMaskedPending
+	for _, existing := range existingTokens {
+		if incoming.ExternalID <= 0 || existing.ExternalID != incoming.ExternalID {
+			continue
+		}
+		if existing.ID != 0 {
+			if _, used := usedExistingIDs[existing.ID]; used {
+				continue
+			}
+			usedExistingIDs[existing.ID] = struct{}{}
+		}
+		incoming.ID = existing.ID
+		if model.IsReadySiteToken(existing) && !model.IsMaskedSiteTokenValue(existing.Token) && siteMaskedTokenMatches(existing.Token, incoming.Token) {
+			incoming.Token = existing.Token
+			incoming.ValueStatus = model.SiteTokenValueStatusReady
+			incoming.Enabled = existing.Enabled
+		}
+		return incoming
+	}
 
 	for _, existing := range existingTokens {
 		if existing.ID != 0 {

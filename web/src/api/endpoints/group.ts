@@ -315,6 +315,7 @@ export function useUpdateGroup() {
         },
         onSettled: () => {
             queryClient.invalidateQueries({ queryKey: ['groups', 'list'] });
+            queryClient.invalidateQueries({ queryKey: ['group-health'] });
         },
     });
 }

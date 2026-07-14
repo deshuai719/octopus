@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Activity, ChevronDown, Clock3, LoaderCircle, Play } from 'lucide-react';
+import { Activity, ChevronDown, Clock3, Copy, LoaderCircle, Play, Trash2 } from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,8 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { useGroupHealthEnabled } from '@/api/endpoints/setting';
+import { useUpdateGroup } from '@/api/endpoints/group';
+import { toast } from '@/components/common/Toast';
 import {
     useGroupHealthList,
     useRunGroupHealth,
@@ -102,12 +104,95 @@ function attemptBadgeTone(status: GroupHealthAttemptStatus) {
     }
 }
 
-export function GroupHealthAttemptDetails({ attempt }: { attempt: GroupHealthAttempt }) {
+function safeDiagnosticMessage(attempt: GroupHealthAttempt) {
+    const error = attempt.error_message.toLowerCase();
+    if (attempt.http_status > 0) return `上游返回 HTTP ${attempt.http_status}`;
+    if (error.includes('deadline') || error.includes('timeout') || error.includes('timed out')) return '探测请求超时';
+    if (error.includes('no available key')) return '渠道没有可用 Key';
+    if (error.includes('failed to load channel')) return '无法加载渠道配置';
+    return attempt.status === 'failed' ? '探测失败；原始错误正文已从诊断上下文省略' : '探测完成';
+}
+
+function suggestedDiagnosticAction(attempt: GroupHealthAttempt) {
+    if (attempt.http_status === 401 || attempt.http_status === 403) return '检查上游 Key 权限、账号登录状态和模型授权';
+    if (attempt.http_status === 404) return '检查模型名、上游 API 路径和协议类型';
+    if (attempt.http_status === 429) return '检查额度、并发限制和上游限流策略';
+    if (attempt.http_status >= 500) return '稍后重试，并检查上游站点状态';
+    if (attempt.probe_profile === 'public_compat' && attempt.duration_ms >= 45000) return '公益站已按 45 秒边界等待；检查排队情况或稍后重试';
+    return '检查渠道端点、模型映射和网络连通性';
+}
+
+export function buildGroupHealthDiagnosticContext(attempt: GroupHealthAttempt) {
+    return JSON.stringify({
+        schema: 'octopus.group_health_diagnostic.v1',
+        status: attempt.status,
+        error_code: attempt.http_status > 0 ? `http_${attempt.http_status}` : 'probe_failed',
+        error_message: safeDiagnosticMessage(attempt),
+        http_status: attempt.http_status || null,
+        duration_ms: attempt.duration_ms,
+        timeout_ms: attempt.probe_profile === 'public_compat' ? 45000 : 12000,
+        model: attempt.model_name,
+        channel: {
+            id: attempt.channel_id,
+            name: attempt.channel_name,
+        },
+        site: attempt.site_id > 0 ? {
+            id: attempt.site_id,
+            name: attempt.site_name,
+            tags: attempt.site_tags,
+            group_name: attempt.site_group_name,
+            group_ratio: attempt.site_group_ratio ?? null,
+            group_ratio_seen_at: attempt.site_group_ratio_seen_at ?? null,
+        } : null,
+        probe_profile: attempt.probe_profile,
+        suggested_action: suggestedDiagnosticAction(attempt),
+        redaction: 'credential values, request bodies, response bodies, cookies and authorization headers are excluded',
+    }, null, 2);
+}
+
+export function GroupHealthAttemptDetails({
+    attempt,
+    selected = false,
+    onSelectionChange,
+    onDelete,
+    deleting = false,
+}: {
+    attempt: GroupHealthAttempt;
+    selected?: boolean;
+    onSelectionChange?: (selected: boolean) => void;
+    onDelete?: () => void;
+    deleting?: boolean;
+}) {
     const t = useTranslations('group.health');
     const hasError = Boolean(attempt.error_message);
+    const selectable = attempt.status === 'failed' && attempt.group_item_id > 0 && Boolean(onSelectionChange);
+    const canDelete = attempt.status === 'failed' && attempt.group_item_id > 0 && Boolean(onDelete);
+
+    const handleCopyDiagnostic = async (event: React.MouseEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+            await navigator.clipboard.writeText(buildGroupHealthDiagnosticContext(attempt));
+            toast.success('已复制脱敏 AI 诊断上下文');
+        } catch {
+            toast.error('复制诊断上下文失败');
+        }
+    };
 
     const content = (
-        <div className="grid grid-cols-[1rem_minmax(0,1fr)_auto] items-start gap-x-2 text-xs">
+        <div className="grid grid-cols-[auto_1rem_minmax(0,1fr)_auto] items-start gap-x-2 text-xs">
+            <div className="flex h-5 min-w-4 items-center justify-center">
+                {selectable ? (
+                    <input
+                        type="checkbox"
+                        checked={selected}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={(event) => onSelectionChange?.(event.target.checked)}
+                        className="size-4 rounded border-border bg-background accent-primary"
+                        aria-label={`选择失败项 ${attempt.channel_name}`}
+                    />
+                ) : null}
+            </div>
             <div className="flex h-5 items-center justify-center text-muted-foreground">
                 {hasError ? <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" /> : null}
             </div>
@@ -122,10 +207,53 @@ export function GroupHealthAttemptDetails({ attempt }: { attempt: GroupHealthAtt
                     <span className="shrink-0">{attempt.duration_ms}ms</span>
                     {attempt.model_name ? <><span className="shrink-0">·</span><span className="min-w-0 truncate">{attempt.model_name}</span></> : null}
                 </div>
+                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
+                    {attempt.site_name ? <span>{attempt.site_name}</span> : <span>非托管渠道</span>}
+                    {attempt.site_tags.map((tag) => (
+                        <Badge key={tag} variant="outline" className="h-4 px-1 text-[9px]">{tag}</Badge>
+                    ))}
+                    {attempt.site_group_name ? <span>· {attempt.site_group_name}</span> : null}
+                    {attempt.site_tags.includes('付费') ? (
+                        <span>
+                            · 倍率 {attempt.site_group_ratio == null ? '未同步' : `${attempt.site_group_ratio}x`}
+                            {attempt.site_group_ratio_seen_at ? `（${formatDateTime(attempt.site_group_ratio_seen_at)}）` : ''}
+                        </span>
+                    ) : null}
+                    <Badge variant="outline" className={cn(
+                        'h-4 px-1 text-[9px]',
+                        attempt.probe_profile === 'public_compat'
+                            ? 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+                            : 'border-border text-muted-foreground',
+                    )}>
+                        {attempt.probe_profile === 'public_compat' ? '公益兼容 · 最长 45 秒' : '标准 · 最长 12 秒'}
+                    </Badge>
+                </div>
             </div>
-            <Badge variant="outline" className={cn('shrink-0 text-[11px]', attemptBadgeTone(attempt.status))}>
-                {t(`attemptStatus.${attempt.status}`)}
-            </Badge>
+            <div className="flex shrink-0 items-center gap-1">
+                <Badge variant="outline" className={cn('shrink-0 text-[11px]', attemptBadgeTone(attempt.status))}>
+                    {t(`attemptStatus.${attempt.status}`)}
+                </Badge>
+                <Button type="button" variant="ghost" size="icon" className="size-7 rounded-lg" onClick={handleCopyDiagnostic} title="复制脱敏 AI 诊断上下文">
+                    <Copy className="size-3.5" />
+                </Button>
+                {canDelete ? (
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-7 rounded-lg text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        disabled={deleting}
+                        onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            onDelete?.();
+                        }}
+                        title="从当前 Octopus 分组删除"
+                    >
+                        {deleting ? <LoaderCircle className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                    </Button>
+                ) : null}
+            </div>
         </div>
     );
 
@@ -160,15 +288,25 @@ export function GroupHealthBadge({ groupId }: { groupId?: number }) {
     const { enabled } = useGroupHealthEnabled();
     const { data: views = [] } = useGroupHealthList();
     const runGroupHealth = useRunGroupHealth();
+    const updateGroup = useUpdateGroup();
     const [open, setOpen] = useState(false);
+    const [selectedFailedItemIds, setSelectedFailedItemIds] = useState<Set<number>>(new Set());
 
     const view = useMemo(
         () => views.find((item) => item.group_id === groupId),
         [groupId, views]
     );
     const latest = view?.latest ?? null;
-    const attempts = latest?.attempts ?? [];
+    const attempts = useMemo(() => latest?.attempts ?? [], [latest?.attempts]);
     const successCount = attempts.filter((attempt) => attempt.status === 'success').length;
+    const failedItemIds = useMemo(
+        () => new Set(attempts.filter((attempt) => attempt.status === 'failed' && attempt.group_item_id > 0).map((attempt) => attempt.group_item_id)),
+        [attempts],
+    );
+    const selectedFailureIds = useMemo(
+        () => Array.from(selectedFailedItemIds).filter((id) => failedItemIds.has(id)),
+        [failedItemIds, selectedFailedItemIds],
+    );
 
     if (!enabled || !groupId) return null;
 
@@ -180,6 +318,36 @@ export function GroupHealthBadge({ groupId }: { groupId?: number }) {
     const isFullRunPending = isRunPendingForGroup
         && runGroupHealth.variables?.probeMode === 'full';
     const lastRunRelative = formatRelativeTime(latest?.finished_at ?? latest?.started_at ?? null, locale, t('never'));
+
+    const toggleFailedItem = (itemId: number, selected: boolean) => {
+        setSelectedFailedItemIds((current) => {
+            const next = new Set(current);
+            if (selected) next.add(itemId);
+            else next.delete(itemId);
+            return next;
+        });
+    };
+
+    const deleteFailedItems = async (itemIds: number[]) => {
+        const uniqueIds = Array.from(new Set(itemIds.filter((id) => id > 0 && failedItemIds.has(id))));
+        if (uniqueIds.length === 0) return;
+        if (!window.confirm(`确认从当前 Octopus 分组删除 ${uniqueIds.length} 个测活失败项？不会删除上游 Key、站点、账号或渠道，历史测活记录会保留。`)) {
+            return;
+        }
+        try {
+            await updateGroup.mutateAsync({ id: groupId, items_to_delete: uniqueIds });
+            setSelectedFailedItemIds((current) => {
+                const next = new Set(current);
+                uniqueIds.forEach((id) => next.delete(id));
+                return next;
+            });
+            toast.success(`已从当前分组删除 ${uniqueIds.length} 个失败项`);
+        } catch {
+            toast.error('删除失败项失败；结果可能已经变化，请刷新后重试');
+        }
+    };
+
+    const deletingItemIds = new Set(updateGroup.isPending ? updateGroup.variables?.items_to_delete ?? [] : []);
 
     return (
         <Dialog open={open} onOpenChange={setOpen}>
@@ -273,9 +441,39 @@ export function GroupHealthBadge({ groupId }: { groupId?: number }) {
                     </Card>
                 </div>
 
+                {failedItemIds.size > 0 ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-destructive/20 bg-destructive/5 px-3 py-2">
+                        <div className="text-xs text-muted-foreground">
+                            可直接清理失败成员；只修改当前 Octopus 分组，历史结果仍保留。
+                        </div>
+                        <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-8 rounded-xl border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            disabled={selectedFailureIds.length === 0 || updateGroup.isPending}
+                            onClick={() => deleteFailedItems(selectedFailureIds)}
+                        >
+                            {updateGroup.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                            删除所选失败项（{selectedFailureIds.length}）
+                        </Button>
+                    </div>
+                ) : null}
+
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
                     {attempts.length ? attempts.map((attempt) => (
-                        <GroupHealthAttemptDetails key={attempt.id} attempt={attempt} />
+                        <GroupHealthAttemptDetails
+                            key={attempt.id}
+                            attempt={attempt}
+                            selected={selectedFailedItemIds.has(attempt.group_item_id)}
+                            onSelectionChange={attempt.status === 'failed' && attempt.group_item_id > 0
+                                ? (selected) => toggleFailedItem(attempt.group_item_id, selected)
+                                : undefined}
+                            onDelete={attempt.status === 'failed' && attempt.group_item_id > 0
+                                ? () => deleteFailedItems([attempt.group_item_id])
+                                : undefined}
+                            deleting={deletingItemIds.has(attempt.group_item_id)}
+                        />
                     )) : (
                         <div className="rounded-2xl border border-dashed border-border/70 bg-muted/20 px-3 py-6 text-center text-xs text-muted-foreground">
                             {t('empty')}

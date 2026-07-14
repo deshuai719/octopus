@@ -185,7 +185,13 @@ async function submitDirectPreview(binding: OctopusBinding, operationID: string,
   await putDirectSession({ origin, operation_id: operationID, platform, capture_id: capture.capture_id, phase: capture.phase, expires_at: capture.expires_at, generation_attempted: extracted.generated_system_token === true, capture });
   await revokeDirectPermission(origin);
   await notifyPanel({ type: "direct_capture_updated", origin, capture });
-  return { ok: true, mode: "direct", origin, capture };
+  return {
+    ok: true,
+    mode: "direct",
+    origin,
+    capture,
+    binding: { version: binding.version, origin: binding.origin, expire_at: binding.expire_at, validated_at: binding.validated_at },
+  };
 }
 
 async function startDirectCapture(tabId: number, origin: string): Promise<WorkerResponse> {
@@ -462,7 +468,13 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, sender, sendRespon
             if (!binding) throw new Error("Octopus 绑定不存在");
             const capture = await octopusAPI<DirectCaptureView>(binding, `/api/v1/site/direct-capture/${encodeURIComponent(indexed.capture_id)}`, indexed.operation_id);
             await putDirectSession({ ...indexed, phase: capture.phase, expires_at: capture.expires_at, capture });
-            sendResponse({ ok: true, mode: "direct", origin, capture });
+            sendResponse({
+              ok: true,
+              mode: "direct",
+              origin,
+              capture,
+              binding: { version: binding.version, origin: binding.origin, expire_at: binding.expire_at, validated_at: binding.validated_at },
+            });
             return;
           }
           if (indexed) {

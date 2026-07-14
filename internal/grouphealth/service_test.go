@@ -254,3 +254,107 @@ func TestRunGroupHealthFullProbeDoesNotSkipRemainingFailoverCandidates(t *testin
 		t.Fatalf("expected second attempt http status %d, got %d", http.StatusServiceUnavailable, view.Latest.Attempts[1].HTTPStatus)
 	}
 }
+
+func TestRunGroupHealthCapturesManagedSiteMetadataAndPublicProfile(t *testing.T) {
+	ctx := setupGroupHealthTestDB(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_public","choices":[{"message":{"role":"assistant","content":"连接正常"}}]}`))
+	}))
+	defer server.Close()
+
+	site := &model.Site{
+		Name:     "public-health-site",
+		Platform: model.SitePlatformNewAPI,
+		BaseURL:  "https://public-health.example.com",
+		Enabled:  true,
+		Tags:     []string{model.SiteTagPublic},
+	}
+	if err := op.SiteCreate(site, ctx); err != nil {
+		t.Fatalf("SiteCreate failed: %v", err)
+	}
+	account := &model.SiteAccount{
+		SiteID:         site.ID,
+		Name:           "public-health-account",
+		CredentialType: model.SiteCredentialTypeAccessToken,
+		AccessToken:    "managed-access-token",
+		Enabled:        true,
+	}
+	if err := op.SiteAccountCreate(account, ctx); err != nil {
+		t.Fatalf("SiteAccountCreate failed: %v", err)
+	}
+	ratio := 0.5
+	ratioSeenAt := time.Now().UTC().Truncate(time.Second)
+	siteGroup := model.SiteUserGroup{
+		SiteAccountID:   account.ID,
+		GroupKey:        "public",
+		Name:            "公益模型",
+		Ratio:           &ratio,
+		RatioLastSeenAt: &ratioSeenAt,
+	}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&siteGroup).Error; err != nil {
+		t.Fatalf("create SiteUserGroup failed: %v", err)
+	}
+
+	channel := &model.Channel{
+		Name:     "public-health-channel",
+		Type:     outbound.OutboundTypeOpenAIChat,
+		Enabled:  true,
+		BaseUrls: []model.BaseUrl{{URL: server.URL + "/v1"}},
+		Model:    "probe-model",
+		Keys:     []model.ChannelKey{{Enabled: true, ChannelKey: "sk-public", Remark: "public"}},
+	}
+	if err := op.ChannelCreate(channel, ctx); err != nil {
+		t.Fatalf("ChannelCreate failed: %v", err)
+	}
+	binding := model.SiteChannelBinding{
+		SiteID:          site.ID,
+		SiteAccountID:   account.ID,
+		SiteUserGroupID: &siteGroup.ID,
+		GroupKey:        "public",
+		ChannelID:       channel.ID,
+	}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&binding).Error; err != nil {
+		t.Fatalf("create SiteChannelBinding failed: %v", err)
+	}
+
+	group := &model.Group{Name: "public-health-probe", Mode: model.GroupModeFailover}
+	if err := op.GroupCreate(group, ctx); err != nil {
+		t.Fatalf("GroupCreate failed: %v", err)
+	}
+	if err := op.GroupItemAdd(&model.GroupItem{GroupID: group.ID, ChannelID: channel.ID, ModelName: "probe-model", Priority: 1, Weight: 1}, ctx); err != nil {
+		t.Fatalf("GroupItemAdd failed: %v", err)
+	}
+
+	service := NewService(op.NewGroupHealthRepository(), &Prober{
+		CandidateTimeout:       5 * time.Second,
+		PublicCandidateTimeout: 5 * time.Second,
+	})
+	if err := service.RunGroupHealth(ctx, group.ID); err != nil {
+		t.Fatalf("RunGroupHealth failed: %v", err)
+	}
+	view, err := service.GetGroupHealthViewByID(ctx, group.ID)
+	if err != nil {
+		t.Fatalf("GetGroupHealthViewByID failed: %v", err)
+	}
+	if view.Latest == nil || len(view.Latest.Attempts) != 1 {
+		t.Fatalf("expected one attempt, got %#v", view.Latest)
+	}
+	attempt := view.Latest.Attempts[0]
+	if attempt.ProbeProfile != model.GroupHealthProbeProfilePublicCompat {
+		t.Fatalf("probe profile = %s, want public_compat", attempt.ProbeProfile)
+	}
+	if attempt.SiteID != site.ID || attempt.SiteName != site.Name {
+		t.Fatalf("site metadata = %d/%q, want %d/%q", attempt.SiteID, attempt.SiteName, site.ID, site.Name)
+	}
+	if len(attempt.SiteTags) != 1 || attempt.SiteTags[0] != model.SiteTagPublic {
+		t.Fatalf("site tags = %#v", attempt.SiteTags)
+	}
+	if attempt.SiteGroupName != siteGroup.Name || attempt.SiteGroupRatio == nil || *attempt.SiteGroupRatio != ratio {
+		t.Fatalf("site group metadata = %q/%v", attempt.SiteGroupName, attempt.SiteGroupRatio)
+	}
+	if attempt.SiteGroupRatioSeenAt == nil || !attempt.SiteGroupRatioSeenAt.Equal(ratioSeenAt) {
+		t.Fatalf("ratio seen at = %v, want %v", attempt.SiteGroupRatioSeenAt, ratioSeenAt)
+	}
+}

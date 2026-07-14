@@ -7,6 +7,7 @@ import type { GroupMode } from './group';
 export type GroupHealthStatus = 'running' | 'success' | 'partial' | 'failed';
 export type GroupHealthAttemptStatus = 'success' | 'failed' | 'skipped';
 export type GroupHealthProbeMode = 'standard' | 'full';
+export type GroupHealthProbeProfile = 'standard' | 'public_compat';
 
 export interface GroupHealthAttempt {
     id: number;
@@ -23,6 +24,13 @@ export interface GroupHealthAttempt {
     http_status: number;
     duration_ms: number;
     error_message: string;
+    site_id: number;
+    site_name: string;
+    site_tags: string[];
+    site_group_name: string;
+    site_group_ratio?: number | null;
+    site_group_ratio_seen_at?: string | null;
+    probe_profile: GroupHealthProbeProfile;
 }
 
 export interface GroupHealthSnapshot {
@@ -81,6 +89,13 @@ function normalizeAttempt(attempt: Partial<GroupHealthAttempt>): GroupHealthAtte
         http_status: typeof attempt.http_status === 'number' ? attempt.http_status : 0,
         duration_ms: typeof attempt.duration_ms === 'number' ? attempt.duration_ms : 0,
         error_message: attempt.error_message ?? '',
+        site_id: typeof attempt.site_id === 'number' ? attempt.site_id : 0,
+        site_name: attempt.site_name ?? '',
+        site_tags: Array.isArray(attempt.site_tags) ? attempt.site_tags.filter((tag): tag is string => typeof tag === 'string') : [],
+        site_group_name: attempt.site_group_name ?? '',
+        site_group_ratio: typeof attempt.site_group_ratio === 'number' ? attempt.site_group_ratio : null,
+        site_group_ratio_seen_at: attempt.site_group_ratio_seen_at ?? null,
+        probe_profile: attempt.probe_profile === 'public_compat' ? 'public_compat' : 'standard',
     };
 }
 

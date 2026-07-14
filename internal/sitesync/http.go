@@ -516,7 +516,11 @@ func ensureBearer(token string) string {
 }
 
 func requestJSONWithManagedAccessToken(ctx context.Context, siteRecord *model.Site, method string, requestURL string, body any, accessToken string, accounts ...*model.SiteAccount) (map[string]any, error) {
-	initialHeaders := managedUserIDHeaders(firstManagedPlatformUserID(accounts...))
+	return requestJSONWithManagedAccessTokenHeaders(ctx, siteRecord, method, requestURL, body, accessToken, nil, accounts...)
+}
+
+func requestJSONWithManagedAccessTokenHeaders(ctx context.Context, siteRecord *model.Site, method string, requestURL string, body any, accessToken string, extraHeaders map[string]string, accounts ...*model.SiteAccount) (map[string]any, error) {
+	initialHeaders := mergeHeaders(managedUserIDHeaders(firstManagedPlatformUserID(accounts...)), extraHeaders)
 	payload, err := requestJSONWithManagedHeaders(ctx, siteRecord, method, requestURL, body, accessToken, initialHeaders, accounts...)
 	if err == nil || !siteRequiresManagedUserIDHeader(siteRecord) || !shouldRetryManagedRequestWithUserID(err) {
 		return payload, err
@@ -531,7 +535,7 @@ func requestJSONWithManagedAccessToken(ctx context.Context, siteRecord *model.Si
 	}
 	rememberManagedPlatformUserID(userID, accounts...)
 
-	userHeaders := managedUserIDHeaders(userID)
+	userHeaders := mergeHeaders(managedUserIDHeaders(userID), extraHeaders)
 	return requestJSONWithManagedHeaders(ctx, siteRecord, method, requestURL, body, accessToken, userHeaders, accounts...)
 }
 
@@ -696,6 +700,14 @@ func jsonString(value any) string {
 	default:
 		return ""
 	}
+}
+
+func jsonInt64(value any) int64 {
+	parsed, err := strconv.ParseInt(jsonString(value), 10, 64)
+	if err != nil || parsed <= 0 {
+		return 0
+	}
+	return parsed
 }
 
 func jsonBool(value any) bool {

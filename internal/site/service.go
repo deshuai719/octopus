@@ -56,6 +56,14 @@ func RefreshAccountRandomCheckinSchedule(ctx context.Context, accountID int) err
 	return sitesync.RefreshAccountRandomCheckinSchedule(ctx, accountID)
 }
 
+func UpdateAccountRemoteToken(ctx context.Context, accountID int, tokenID int, req model.SiteRemoteKeyUpdateRequest) (*model.SiteRemoteKeyMutationResult, error) {
+	return sitesync.UpdateAccountRemoteToken(ctx, accountID, tokenID, req)
+}
+
+func DeleteAccountRemoteToken(ctx context.Context, accountID int, tokenID int) (*model.SiteRemoteKeyMutationResult, error) {
+	return sitesync.DeleteAccountRemoteToken(ctx, accountID, tokenID)
+}
+
 func DeleteSite(ctx context.Context, siteID int) error {
 	return sitesync.DeleteSite(ctx, siteID)
 }

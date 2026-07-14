@@ -58,6 +58,7 @@ type SiteChannelGroup struct {
 
 type SiteSourceKey struct {
 	ID          int                  `json:"id"`
+	ExternalID  int64                `json:"external_id"`
 	Enabled     bool                 `json:"enabled"`
 	Token       string               `json:"token"`
 	TokenMasked string               `json:"token_masked"`
@@ -154,6 +155,17 @@ type SiteManualModelDeleteRequest struct {
 type SiteChannelKeyCreateRequest struct {
 	GroupKey string `json:"group_key" binding:"required"`
 	Name     string `json:"name,omitempty"`
+}
+
+type SiteRemoteKeyUpdateRequest struct {
+	Name     *string `json:"name,omitempty"`
+	GroupKey *string `json:"group_key,omitempty"`
+}
+
+type SiteRemoteKeyMutationResult struct {
+	RemoteApplied bool            `json:"remote_applied"`
+	Message       string          `json:"message"`
+	SyncResult    *SiteSyncResult `json:"sync_result,omitempty"`
 }
 
 type SiteProjectedKeyAddRequest struct {

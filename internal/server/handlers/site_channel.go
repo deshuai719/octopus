@@ -24,12 +24,14 @@ func init() {
 		AddRoute(router.NewRoute("/list", http.MethodGet).Handle(listSiteChannel)).
 		AddRoute(router.NewRoute("/:siteId", http.MethodGet).Handle(getSiteChannel)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId", http.MethodGet).Handle(getSiteChannelAccount)).
-		AddRoute(router.NewRoute("/:siteId/account/:accountId/model-history", http.MethodGet).Handle(getSiteChannelModelHistory))
+		AddRoute(router.NewRoute("/:siteId/account/:accountId/model-history", http.MethodGet).Handle(getSiteChannelModelHistory)).
+		AddRoute(router.NewRoute("/:siteId/account/:accountId/remote-keys/:tokenId", http.MethodDelete).Handle(deleteSiteRemoteKey))
 
 	router.NewGroupRouter("/api/v1/site-channel").
 		Use(middleware.Auth()).
 		Use(middleware.RequireJSON()).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/keys", http.MethodPost).Handle(createSiteChannelKey)).
+		AddRoute(router.NewRoute("/:siteId/account/:accountId/remote-keys/:tokenId", http.MethodPut).Handle(updateSiteRemoteKey)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/source-keys", http.MethodPut).Handle(updateSiteSourceKeys)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/group-projection", http.MethodPut).Handle(updateSiteGroupProjection)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/model-routes", http.MethodPut).Handle(updateSiteChannelModelRoutes)).
@@ -38,6 +40,55 @@ func init() {
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/manual-models", http.MethodPost).Handle(addSiteManualModels)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/manual-models/delete", http.MethodPost).Handle(deleteSiteManualModel)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/model-routes/reset", http.MethodPost).Handle(resetSiteChannelModelRoutes))
+}
+
+func updateSiteRemoteKey(c *gin.Context) {
+	siteID, accountID, ok := parseSiteChannelIDs(c)
+	if !ok {
+		return
+	}
+	if _, err := op.SiteChannelAccountGet(siteID, accountID, c.Request.Context()); err != nil {
+		resp.Error(c, http.StatusNotFound, "site account not found")
+		return
+	}
+	tokenID, err := strconv.Atoi(c.Param("tokenId"))
+	if err != nil || tokenID <= 0 {
+		resp.InvalidParam(c)
+		return
+	}
+	var req model.SiteRemoteKeyUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.InvalidJSON(c)
+		return
+	}
+	result, err := sitesvc.UpdateAccountRemoteToken(c.Request.Context(), accountID, tokenID, req)
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp.Success(c, result)
+}
+
+func deleteSiteRemoteKey(c *gin.Context) {
+	siteID, accountID, ok := parseSiteChannelIDs(c)
+	if !ok {
+		return
+	}
+	if _, err := op.SiteChannelAccountGet(siteID, accountID, c.Request.Context()); err != nil {
+		resp.Error(c, http.StatusNotFound, "site account not found")
+		return
+	}
+	tokenID, err := strconv.Atoi(c.Param("tokenId"))
+	if err != nil || tokenID <= 0 {
+		resp.InvalidParam(c)
+		return
+	}
+	result, err := sitesvc.DeleteAccountRemoteToken(c.Request.Context(), accountID, tokenID)
+	if err != nil {
+		resp.Error(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp.Success(c, result)
 }
 
 func listSiteChannel(c *gin.Context) {

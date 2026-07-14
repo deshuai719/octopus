@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
+	"unicode"
 
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/utils/log"
@@ -255,16 +255,34 @@ func buildSub2APITokenCreatePayload(account *model.SiteAccount, groupKey string,
 
 func defaultSiteTokenCreateName(account *model.SiteAccount, groupKey string, name string) string {
 	if trimmed := strings.TrimSpace(name); trimmed != "" {
-		return trimmed
+		return normalizeSiteTokenCreateName(trimmed)
 	}
 
-	groupPart := strings.TrimSpace(groupKey)
-	groupPart = strings.NewReplacer("/", "-", "\\", "-", " ", "-", "\t", "-", "\n", "-").Replace(groupPart)
-	groupPart = strings.Trim(groupPart, "-")
-	if groupPart == "" {
-		groupPart = model.SiteDefaultGroupKey
+	return normalizeSiteTokenCreateName(firstNonEmptyString(strings.TrimSpace(groupKey), model.SiteDefaultGroupKey))
+}
+
+func normalizeSiteTokenCreateName(value string) string {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		switch r {
+		case '/', '\\':
+			return '-'
+		default:
+			return r
+		}
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	value = strings.Trim(value, " -_")
+	if value == "" {
+		value = model.SiteDefaultGroupKey
 	}
-	return fmt.Sprintf("octopus-%s-%d", groupPart, time.Now().Unix())
+	runes := []rune(value)
+	if len(runes) > 50 {
+		value = strings.TrimSpace(string(runes[:50]))
+	}
+	return value
 }
 
 func siteTokenCreateSucceeded(payload map[string]any) bool {

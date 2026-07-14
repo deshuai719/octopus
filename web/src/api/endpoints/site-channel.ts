@@ -105,6 +105,7 @@ export type SiteChannelGroup = {
 
 export type SiteSourceKey = {
     id: number;
+    external_id: number;
     enabled: boolean;
     token: string;
     token_masked: string;
@@ -311,6 +312,7 @@ function normalizeSiteChannelAccount(account: SiteChannelAccountServer): SiteCha
             projected_channels: (group.projected_channels ?? []).map(normalizeProjectedChannel).filter((channel) => channel.channel_id > 0),
             source_keys: (group.source_keys ?? []).map((key) => ({
                 ...key,
+                external_id: typeof key.external_id === 'number' ? key.external_id : 0,
                 token: typeof key.token === 'string' ? key.token : '',
                 token_masked: typeof key.token_masked === 'string' ? key.token_masked : '',
                 name: typeof key.name === 'string' ? key.name : '',
@@ -407,6 +409,16 @@ export type SiteSourceKeyUpdateRequest = {
     keys_to_add?: SiteSourceKeyAddRequest[];
     keys_to_update?: SiteSourceKeyUpdateItem[];
     keys_to_delete?: number[];
+};
+
+export type SiteRemoteKeyUpdateRequest = {
+    name?: string;
+    group_key?: string;
+};
+
+export type SiteRemoteKeyMutationResult = {
+    remote_applied: boolean;
+    message: string;
 };
 
 export type SiteGroupProjectionUpdateRequest = {
@@ -529,6 +541,36 @@ export function useUpdateSiteSourceKeys(siteId: number, accountId: number) {
         },
         onError: (error) => {
             logger.error('site source key update failed:', error);
+        },
+    });
+}
+
+export function useUpdateSiteRemoteKey(siteId: number, accountId: number) {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async ({ tokenId, payload }: { tokenId: number; payload: SiteRemoteKeyUpdateRequest }) =>
+            apiClient.put<SiteRemoteKeyMutationResult>(getAccountPath(siteId, accountId, `/remote-keys/${tokenId}`), payload),
+        onSuccess: () => {
+            invalidateSiteChannelAndRelated(queryClient);
+        },
+        onError: (error) => {
+            logger.error('site remote key update failed:', error);
+        },
+    });
+}
+
+export function useDeleteSiteRemoteKey(siteId: number, accountId: number) {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (tokenId: number) =>
+            apiClient.delete<SiteRemoteKeyMutationResult>(getAccountPath(siteId, accountId, `/remote-keys/${tokenId}`)),
+        onSuccess: () => {
+            invalidateSiteChannelAndRelated(queryClient);
+        },
+        onError: (error) => {
+            logger.error('site remote key deletion failed:', error);
         },
     });
 }

@@ -23,16 +23,22 @@ type ProbeResult struct {
 }
 
 type Prober struct {
-	CandidateTimeout time.Duration
+	CandidateTimeout       time.Duration
+	PublicCandidateTimeout time.Duration
 }
 
 func NewProber() *Prober {
 	return &Prober{
-		CandidateTimeout: 12 * time.Second,
+		CandidateTimeout:       12 * time.Second,
+		PublicCandidateTimeout: 45 * time.Second,
 	}
 }
 
 func (p *Prober) RunCandidate(ctx context.Context, channel model.Channel, usedKey model.ChannelKey, modelName string) ProbeResult {
+	return p.RunCandidateWithProfile(ctx, channel, usedKey, modelName, model.GroupHealthProbeProfileStandard)
+}
+
+func (p *Prober) RunCandidateWithProfile(ctx context.Context, channel model.Channel, usedKey model.ChannelKey, modelName string, profile model.GroupHealthProbeProfile) ProbeResult {
 	startedAt := time.Now()
 	result := ProbeResult{}
 
@@ -40,11 +46,17 @@ func (p *Prober) RunCandidate(ctx context.Context, channel model.Channel, usedKe
 	if timeout <= 0 {
 		timeout = 12 * time.Second
 	}
+	if profile == model.GroupHealthProbeProfilePublicCompat {
+		timeout = p.PublicCandidateTimeout
+		if timeout <= 0 {
+			timeout = 45 * time.Second
+		}
+	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	request, err := buildProbeRequest(probeCtx, &channel, &usedKey, modelName)
+	request, err := buildProbeRequestWithProfile(probeCtx, &channel, &usedKey, modelName, profile)
 	if err != nil {
 		result.ErrorMessage = err.Error()
 		result.DurationMS = time.Since(startedAt).Milliseconds()
@@ -96,6 +108,10 @@ func (p *Prober) RunCandidate(ctx context.Context, channel model.Channel, usedKe
 }
 
 func buildProbeRequest(ctx context.Context, channel *model.Channel, usedKey *model.ChannelKey, modelName string) (*http.Request, error) {
+	return buildProbeRequestWithProfile(ctx, channel, usedKey, modelName, model.GroupHealthProbeProfileStandard)
+}
+
+func buildProbeRequestWithProfile(ctx context.Context, channel *model.Channel, usedKey *model.ChannelKey, modelName string, profile model.GroupHealthProbeProfile) (*http.Request, error) {
 	if channel == nil {
 		return nil, fmt.Errorf("channel is nil")
 	}
@@ -109,7 +125,7 @@ func buildProbeRequest(ctx context.Context, channel *model.Channel, usedKey *mod
 		return nil, fmt.Errorf("model name is empty")
 	}
 
-	request := buildProbeInternalRequest(channel.Type, modelName)
+	request := buildProbeInternalRequest(channel.Type, modelName, profile)
 	adapter := outbound.Get(channel.Type)
 	if adapter == nil {
 		return nil, fmt.Errorf("unsupported outbound type: %d", channel.Type)
@@ -117,10 +133,15 @@ func buildProbeRequest(ctx context.Context, channel *model.Channel, usedKey *mod
 	return adapter.TransformRequest(ctx, request, channel.GetBaseUrl(), usedKey.ChannelKey)
 }
 
-func buildProbeInternalRequest(channelType outbound.OutboundType, modelName string) *transformerModel.InternalLLMRequest {
+func buildProbeInternalRequest(channelType outbound.OutboundType, modelName string, profile model.GroupHealthProbeProfile) *transformerModel.InternalLLMRequest {
 	stream := false
 	ping := "ping"
-	one := int64(1)
+	prompt := ping
+	maxTokens := int64(1)
+	if profile == model.GroupHealthProbeProfilePublicCompat && channelType != outbound.OutboundTypeOpenAIEmbedding {
+		prompt = "请简短回答：你能正常收到并回复这条消息吗？如果可以，只回答“连接正常”。"
+		maxTokens = 32
+	}
 
 	switch channelType {
 	case outbound.OutboundTypeOpenAIEmbedding:
@@ -135,43 +156,55 @@ func buildProbeInternalRequest(channelType outbound.OutboundType, modelName stri
 		return &transformerModel.InternalLLMRequest{
 			Model:               modelName,
 			RawAPIFormat:        transformerModel.APIFormatOpenAIResponse,
-			Messages:            []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &ping}}},
+			Messages:            []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &prompt}}},
 			Stream:              &stream,
-			MaxCompletionTokens: &one,
+			MaxCompletionTokens: &maxTokens,
 		}
 	case outbound.OutboundTypeAnthropic:
 		return &transformerModel.InternalLLMRequest{
 			Model:        modelName,
 			RawAPIFormat: transformerModel.APIFormatAnthropicMessage,
-			Messages:     []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &ping}}},
+			Messages:     []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &prompt}}},
 			Stream:       &stream,
-			MaxTokens:    &one,
+			MaxTokens:    &maxTokens,
 		}
 	case outbound.OutboundTypeGemini:
 		return &transformerModel.InternalLLMRequest{
 			Model:        modelName,
 			RawAPIFormat: transformerModel.APIFormatGeminiContents,
-			Messages:     []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &ping}}},
+			Messages:     []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &prompt}}},
 			Stream:       &stream,
-			MaxTokens:    &one,
+			MaxTokens:    &maxTokens,
 		}
 	case outbound.OutboundTypeVolcengine:
 		return &transformerModel.InternalLLMRequest{
 			Model:        modelName,
 			RawAPIFormat: transformerModel.APIFormatOpenAIChatCompletion,
-			Messages:     []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &ping}}},
+			Messages:     []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &prompt}}},
 			Stream:       &stream,
-			MaxTokens:    &one,
+			MaxTokens:    &maxTokens,
 		}
 	default:
 		return &transformerModel.InternalLLMRequest{
 			Model:        modelName,
 			RawAPIFormat: transformerModel.APIFormatOpenAIChatCompletion,
-			Messages:     []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &ping}}},
+			Messages:     []transformerModel.Message{{Role: "user", Content: transformerModel.MessageContent{Content: &prompt}}},
 			Stream:       &stream,
-			MaxTokens:    &one,
+			MaxTokens:    &maxTokens,
 		}
 	}
+}
+
+func selectProbeProfile(tags []string, channelType outbound.OutboundType) model.GroupHealthProbeProfile {
+	if channelType == outbound.OutboundTypeOpenAIEmbedding {
+		return model.GroupHealthProbeProfileStandard
+	}
+	for _, tag := range tags {
+		if tag == model.SiteTagPublic {
+			return model.GroupHealthProbeProfilePublicCompat
+		}
+	}
+	return model.GroupHealthProbeProfileStandard
 }
 
 func applyCustomHeaders(request *http.Request, headers []model.CustomHeader) {

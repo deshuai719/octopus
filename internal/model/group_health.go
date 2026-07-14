@@ -26,6 +26,13 @@ const (
 	GroupHealthProbeModeFull     GroupHealthProbeMode = "full"
 )
 
+type GroupHealthProbeProfile string
+
+const (
+	GroupHealthProbeProfileStandard     GroupHealthProbeProfile = "standard"
+	GroupHealthProbeProfilePublicCompat GroupHealthProbeProfile = "public_compat"
+)
+
 type GroupHealthSnapshot struct {
 	ID                  int                  `json:"id" gorm:"primaryKey"`
 	GroupID             int                  `json:"group_id" gorm:"index:idx_group_health_group_started"`
@@ -43,20 +50,27 @@ type GroupHealthSnapshot struct {
 }
 
 type GroupHealthAttempt struct {
-	ID           int                      `json:"id" gorm:"primaryKey"`
-	SnapshotID   int                      `json:"snapshot_id" gorm:"index:idx_group_health_attempt_snapshot_priority;not null"`
-	GroupItemID  int                      `json:"group_item_id" gorm:"not null"`
-	ChannelID    int                      `json:"channel_id" gorm:"not null"`
-	ChannelName  string                   `json:"channel_name" gorm:"type:varchar(255);not null"`
-	ChannelKeyID int                      `json:"channel_key_id" gorm:"not null;default:0"`
-	KeyRemark    string                   `json:"key_remark"`
-	ModelName    string                   `json:"model_name" gorm:"type:varchar(255);not null"`
-	Priority     int                      `json:"priority" gorm:"index:idx_group_health_attempt_snapshot_priority;not null"`
-	Weight       int                      `json:"weight" gorm:"not null;default:0"`
-	Status       GroupHealthAttemptStatus `json:"status" gorm:"type:varchar(16);not null"`
-	HTTPStatus   int                      `json:"http_status" gorm:"not null;default:0"`
-	DurationMS   int64                    `json:"duration_ms" gorm:"not null;default:0"`
-	ErrorMessage string                   `json:"error_message"`
+	ID                   int                      `json:"id" gorm:"primaryKey"`
+	SnapshotID           int                      `json:"snapshot_id" gorm:"index:idx_group_health_attempt_snapshot_priority;not null"`
+	GroupItemID          int                      `json:"group_item_id" gorm:"not null"`
+	ChannelID            int                      `json:"channel_id" gorm:"not null"`
+	ChannelName          string                   `json:"channel_name" gorm:"type:varchar(255);not null"`
+	ChannelKeyID         int                      `json:"channel_key_id" gorm:"not null;default:0"`
+	KeyRemark            string                   `json:"key_remark"`
+	ModelName            string                   `json:"model_name" gorm:"type:varchar(255);not null"`
+	Priority             int                      `json:"priority" gorm:"index:idx_group_health_attempt_snapshot_priority;not null"`
+	Weight               int                      `json:"weight" gorm:"not null;default:0"`
+	Status               GroupHealthAttemptStatus `json:"status" gorm:"type:varchar(16);not null"`
+	HTTPStatus           int                      `json:"http_status" gorm:"not null;default:0"`
+	DurationMS           int64                    `json:"duration_ms" gorm:"not null;default:0"`
+	ErrorMessage         string                   `json:"error_message"`
+	SiteID               int                      `json:"site_id" gorm:"column:site_id;-:migration"`
+	SiteName             string                   `json:"site_name" gorm:"column:site_name;-:migration"`
+	SiteTags             []string                 `json:"site_tags" gorm:"column:site_tags;serializer:json;-:migration"`
+	SiteGroupName        string                   `json:"site_group_name" gorm:"column:site_group_name;-:migration"`
+	SiteGroupRatio       *float64                 `json:"site_group_ratio,omitempty" gorm:"column:site_group_ratio;-:migration"`
+	SiteGroupRatioSeenAt *time.Time               `json:"site_group_ratio_seen_at,omitempty" gorm:"column:site_group_ratio_seen_at;-:migration"`
+	ProbeProfile         GroupHealthProbeProfile  `json:"probe_profile" gorm:"column:probe_profile;-:migration"`
 }
 
 type GroupHealthGroupView struct {

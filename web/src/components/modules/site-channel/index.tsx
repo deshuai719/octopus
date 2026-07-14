@@ -84,12 +84,14 @@ import {
     type SiteModelRouteType,
     type SiteModelRouteUpdateRequest,
     useCreateSiteChannelKey,
+    useDeleteSiteRemoteKey,
     useAddSiteManualModels,
     useDeleteSiteManualModel,
     useResetSiteChannelModelRoutes,
     useSiteChannelList,
     useUpdateSiteProjectedChannelSettings,
     useUpdateSiteGroupProjection,
+    useUpdateSiteRemoteKey,
     useUpdateAnySiteSourceKeys,
     useUpdateSiteSourceKeys,
     useUpdateSiteChannelModelDisabled,
@@ -1278,6 +1280,7 @@ const SiteChannelTableView = forwardRef<
 
 function SiteAccountPanel({
     siteId,
+    platform,
     account,
     accounts,
     activeAccountId,
@@ -1289,6 +1292,7 @@ function SiteAccountPanel({
     onNavigateToChannel,
 }: {
     siteId: number;
+    platform: SiteChannelCard['platform'];
     account: SiteChannelAccount;
     accounts: SiteChannelAccount[];
     activeAccountId: number | null;
@@ -1317,6 +1321,9 @@ function SiteAccountPanel({
     const [sourceKeyForm, setSourceKeyForm] = useState<SiteSourceKeyFormItem[]>([]);
     const [visibleSourceKeyRows, setVisibleSourceKeyRows] = useState<Record<string, boolean>>({});
     const [quickCreateName, setQuickCreateName] = useState('');
+    const [bulkCreatingKeys, setBulkCreatingKeys] = useState(false);
+    const [savingSiteKeys, setSavingSiteKeys] = useState(false);
+    const [deletingRemoteKeyId, setDeletingRemoteKeyId] = useState<number | null>(null);
     const [highlightedModelKey, setHighlightedModelKey] = useState<string | null>(null);
     const [modelSearchTerm, setModelSearchTerm] = useState('');
     const [bulkMoveTarget, setBulkMoveTarget] = useState<SiteModelRouteType>('openai_chat');
@@ -1333,6 +1340,8 @@ function SiteAccountPanel({
 
     const createKeyMutation = useCreateSiteChannelKey(siteId, account.account_id);
     const sourceKeyMutation = useUpdateSiteSourceKeys(siteId, account.account_id);
+    const updateRemoteKeyMutation = useUpdateSiteRemoteKey(siteId, account.account_id);
+    const deleteRemoteKeyMutation = useDeleteSiteRemoteKey(siteId, account.account_id);
     const advancedMutation = useUpdateSiteProjectedChannelSettings(siteId, account.account_id);
     const groupProjectionMutation = useUpdateSiteGroupProjection(siteId, account.account_id);
     const addManualModelsMutation = useAddSiteManualModels(siteId, account.account_id);
@@ -1567,7 +1576,7 @@ function SiteAccountPanel({
 
     const handleOpenCreateKey = (group: SiteChannelGroup) => {
         setCreatingGroup(group);
-        setQuickCreateName('');
+        setQuickCreateName(group.group_name || group.group_key);
     };
 
     const handleToggleGroupProjection = (group: SiteChannelGroup) => {
@@ -1612,6 +1621,33 @@ function SiteAccountPanel({
         );
     };
 
+    const handleCreateAllPendingKeys = async () => {
+        if (bulkCreatingKeys || pendingKeyGroups.length === 0) return;
+
+        setBulkCreatingKeys(true);
+        const failed: string[] = [];
+        let succeeded = 0;
+        for (const group of pendingKeyGroups) {
+            const displayName = group.group_name || group.group_key;
+            try {
+                await createKeyMutation.mutateAsync({
+                    group_key: group.group_key,
+                    name: displayName,
+                });
+                succeeded += 1;
+            } catch {
+                failed.push(displayName);
+            }
+        }
+        setBulkCreatingKeys(false);
+
+        if (failed.length === 0) {
+            toast.success(`已按分组名创建并同步 ${succeeded} 个 Key`);
+            return;
+        }
+        toast.error(`批量创建完成：成功 ${succeeded} 个，失败 ${failed.length} 个（${failed.join('、')}）`);
+    };
+
     const handleOpenProjectedKeys = (group: SiteChannelGroup) => {
         const items = buildSourceKeyFormItems(group);
         setEditingProjectedGroup(group);
@@ -1620,7 +1656,7 @@ function SiteAccountPanel({
     };
 
     const handleCloseProjectedKeys = () => {
-        if (sourceKeyMutation.isPending) return;
+        if (sourceKeyMutation.isPending || savingSiteKeys || deleteRemoteKeyMutation.isPending) return;
         setEditingProjectedGroup(null);
         setSourceKeyForm([]);
         setVisibleSourceKeyRows({});
@@ -1765,6 +1801,7 @@ function SiteAccountPanel({
     };
 
     const handleAddProjectedKeyRow = () => {
+        if (!editingProjectedGroup) return;
         setSourceKeyForm((current) => ([
             ...current,
             {
@@ -1772,6 +1809,8 @@ function SiteAccountPanel({
                 token: '',
                 is_new: true,
                 name: '',
+                group_key: editingProjectedGroup.group_key,
+                group_name: editingProjectedGroup.group_name,
                 value_status: 'ready',
             },
         ]));
@@ -1781,13 +1820,37 @@ function SiteAccountPanel({
         setSourceKeyForm((current) => current.filter((_, itemIndex) => itemIndex !== index));
     };
 
-    const handleSaveProjectedKeys = () => {
-        if (!editingProjectedGroup) return;
+    const handleDeleteRemoteProjectedKey = async (item: SiteSourceKeyFormItem) => {
+        if (!item.id || !item.external_id || deletingRemoteKeyId !== null) return;
+        const label = item.name.trim() || `Key #${item.id}`;
+        if (!window.confirm(`确认从上游站点删除「${label}」？删除后 Octopus 会重新同步；此操作不会删除站点或账号。`)) {
+            return;
+        }
+
+        setDeletingRemoteKeyId(item.id);
+        try {
+            const result = await deleteRemoteKeyMutation.mutateAsync(item.id);
+            setSourceKeyForm((current) => current.filter((candidate) => candidate.id !== item.id));
+            if (result.message.includes('重同步失败')) {
+                toast.warning(result.message, { duration: 8000 });
+            } else {
+                toast.success(result.message || '上游 Key 已删除并完成同步');
+            }
+        } catch (error) {
+            toast.error(translateSiteError(error, '删除上游 Key 失败'));
+        } finally {
+            setDeletingRemoteKeyId(null);
+        }
+    };
+
+    const handleSaveProjectedKeys = async () => {
+        if (!editingProjectedGroup || savingSiteKeys) return;
         const originalById = new Map(editingProjectedGroup.source_keys.map((key) => [key.id, key] as const));
         for (const item of sourceKeyForm) {
             if (!item.id) continue;
             const original = originalById.get(item.id);
             if (!original) continue;
+            if (item.external_id && item.external_id > 0) continue;
             if (original.value_status !== 'masked_pending') continue;
             const trimmed = item.token.trim();
             if (trimmed === (original.token ?? '').trim()) continue;
@@ -1801,22 +1864,58 @@ function SiteAccountPanel({
                 return;
             }
         }
-        const payload = buildSourceKeyUpdatePayload(editingProjectedGroup.group_key, editingProjectedGroup.source_keys, sourceKeyForm);
-        if (!payload.keys_to_add?.length && !payload.keys_to_update?.length && !payload.keys_to_delete?.length) {
+
+        const localOriginalKeys = editingProjectedGroup.source_keys.filter((key) => key.external_id <= 0);
+        const localNextKeys = sourceKeyForm.filter((key) => !key.external_id || key.external_id <= 0);
+        const payload = buildSourceKeyUpdatePayload(editingProjectedGroup.group_key, localOriginalKeys, localNextKeys);
+        const remoteUpdates = sourceKeyForm.flatMap((item) => {
+            if (!item.id || !item.external_id || item.external_id <= 0) return [];
+            const original = originalById.get(item.id);
+            if (!original) return [];
+            const update: { name?: string; group_key?: string } = {};
+            if (item.name.trim() !== original.name.trim()) update.name = item.name.trim();
+            if (item.group_key.trim() !== original.group_key.trim()) update.group_key = item.group_key.trim();
+            return Object.keys(update).length > 0 ? [{ tokenId: item.id, payload: update }] : [];
+        });
+        const remoteEnabledUpdates = sourceKeyForm.flatMap((item) => {
+            if (!item.id || !item.external_id || item.external_id <= 0) return [];
+            const original = originalById.get(item.id);
+            return original && item.enabled !== original.enabled ? [{ id: item.id, enabled: item.enabled }] : [];
+        });
+        if (remoteEnabledUpdates.length > 0) {
+            payload.keys_to_update = [...(payload.keys_to_update ?? []), ...remoteEnabledUpdates];
+        }
+
+        const hasLocalChanges = Boolean(payload.keys_to_add?.length || payload.keys_to_update?.length || payload.keys_to_delete?.length);
+        if (!hasLocalChanges && remoteUpdates.length === 0) {
             toast.error('没有需要保存的 Key 变更');
             return;
         }
-        sourceKeyMutation.mutate(payload, {
-            onSuccess: () => {
+
+        setSavingSiteKeys(true);
+        try {
+            if (hasLocalChanges) {
+                await sourceKeyMutation.mutateAsync(payload);
+            }
+            const remoteMessages: string[] = [];
+            for (const update of remoteUpdates) {
+                const result = await updateRemoteKeyMutation.mutateAsync(update);
+                if (result.message) remoteMessages.push(result.message);
+            }
+            const remoteSyncFailure = remoteMessages.find((message) => message.includes('重同步失败'));
+            if (remoteSyncFailure) {
+                toast.warning(remoteSyncFailure, { duration: 8000 });
+            } else {
                 toast.success(`分组「${editingProjectedGroup.group_name || editingProjectedGroup.group_key}」的站点 Key 已更新`);
-                setEditingProjectedGroup(null);
-                setSourceKeyForm([]);
-                setVisibleSourceKeyRows({});
-            },
-            onError: (error) => {
-                toast.error(translateSiteError(error, '更新站点 Key 失败'));
-            },
-        });
+            }
+            setEditingProjectedGroup(null);
+            setSourceKeyForm([]);
+            setVisibleSourceKeyRows({});
+        } catch (error) {
+            toast.error(translateSiteError(error, '更新站点 Key 失败'));
+        } finally {
+            setSavingSiteKeys(false);
+        }
     };
 
     const handleToggleDisabled = (model: SiteModelView) => {
@@ -1870,13 +1969,31 @@ function SiteAccountPanel({
         [visibleGroups],
     );
     const projectedGroups = useMemo(
-        () => visibleGroups.filter((group) => group.has_projected_channel),
+        () => visibleGroups.filter((group) => group.source_keys.length > 0),
         [visibleGroups],
     );
     const unsupportedRouteCount = useMemo(
         () => visibleModels.filter((model) => !isSupportedRouteType(model.route_type)).length,
         [visibleModels],
     );
+    const supportsRemoteKeyManagement = platform === 'new-api' || platform === 'sub2api';
+    const siteKeyMutationPending = savingSiteKeys || sourceKeyMutation.isPending || updateRemoteKeyMutation.isPending || deleteRemoteKeyMutation.isPending;
+    const hasSiteKeyChanges = useMemo(() => {
+        if (!editingProjectedGroup) return false;
+        const originalById = new Map(editingProjectedGroup.source_keys.map((key) => [key.id, key] as const));
+        const localOriginal = editingProjectedGroup.source_keys.filter((key) => key.external_id <= 0);
+        const localNext = sourceKeyForm.filter((key) => !key.external_id || key.external_id <= 0);
+        if (hasSourceKeyChanges(localOriginal, localNext)) return true;
+        return sourceKeyForm.some((item) => {
+            if (!item.id || !item.external_id || item.external_id <= 0) return false;
+            const original = originalById.get(item.id);
+            return Boolean(original && (
+                item.enabled !== original.enabled ||
+                item.name.trim() !== original.name.trim() ||
+                item.group_key.trim() !== original.group_key.trim()
+            ));
+        });
+    }, [editingProjectedGroup, sourceKeyForm]);
 
     const handleGroupFilterChange = useCallback((value: string) => {
         setActiveFilter(value === SITE_GROUP_FILTER_ALL_VALUE ? SITE_GROUP_FILTER_ALL : createGroupFilter(value));
@@ -2177,7 +2294,19 @@ function SiteAccountPanel({
                                 </PopoverTrigger>
                                 <PopoverContent align="start" className="w-72 rounded-2xl border border-amber-500/30 bg-card p-3 shadow-xl">
                                     <div className="space-y-2">
-                                        <div className="text-xs font-medium text-muted-foreground">未创建 Key 的分组</div>
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="text-xs font-medium text-muted-foreground">未创建 Key 的分组</div>
+                                            <Button
+                                                type="button"
+                                                size="sm"
+                                                className="h-7 rounded-full px-3 text-xs"
+                                                onClick={handleCreateAllPendingKeys}
+                                                disabled={bulkCreatingKeys || createKeyMutation.isPending}
+                                            >
+                                                <RefreshCw className={cn('size-3.5', bulkCreatingKeys && 'animate-spin')} />
+                                                {bulkCreatingKeys ? '批量创建中' : '创建全部'}
+                                            </Button>
+                                        </div>
                                         <div className="flex flex-wrap gap-2">
                                             {pendingKeyGroups.map((group) => (
                                                 <Button
@@ -2187,7 +2316,7 @@ function SiteAccountPanel({
                                                     size="sm"
                                                     className="rounded-full border-amber-500/30 bg-white/60 text-amber-800 hover:bg-white dark:bg-background/40 dark:text-amber-200"
                                                     onClick={() => handleOpenCreateKey(group)}
-                                                    disabled={createKeyMutation.isPending}
+                                                    disabled={bulkCreatingKeys || createKeyMutation.isPending}
                                                 >
                                                     {group.group_name || group.group_key}
                                                     <span className="text-[10px] text-amber-700/80 dark:text-amber-200/80">
@@ -2220,12 +2349,12 @@ function SiteAccountPanel({
                                         className="inline-flex h-8 items-center gap-2 rounded-full border border-border/70 bg-background/70 px-3 text-xs font-medium text-foreground transition hover:bg-muted/60"
                                     >
                                         <KeyRound className="size-3.5 text-primary" />
-                                        投影 Key {projectedGroups.length} 组
+                                        站点 Key {projectedGroups.length} 组
                                     </button>
                                 </PopoverTrigger>
                                 <PopoverContent align="start" className="w-72 rounded-2xl border border-border/70 bg-card p-3 shadow-xl">
                                     <div className="space-y-2">
-                                        <div className="text-xs font-medium text-muted-foreground">投影渠道 Key 管理</div>
+                                        <div className="text-xs font-medium text-muted-foreground">站点上游 Key 管理</div>
                                         <div className="flex flex-wrap gap-2">
                                             {projectedGroups.map((group) => (
                                                 <Button
@@ -2237,7 +2366,7 @@ function SiteAccountPanel({
                                                     onClick={() => handleOpenProjectedKeys(group)}
                                                 >
                                                     {group.group_name || group.group_key}
-                                                    <span className="text-[10px] text-muted-foreground">{group.projected_keys.length} Keys</span>
+                                                    <span className="text-[10px] text-muted-foreground">{group.source_keys.length} Keys</span>
                                                 </Button>
                                             ))}
                                         </div>
@@ -2305,11 +2434,11 @@ function SiteAccountPanel({
                         </div>
 
                         <label className="grid gap-1.5 text-xs text-muted-foreground">
-                            Key 名称（可选）
+                            Key 名称
                             <Input
                                 value={quickCreateName}
                                 onChange={(event) => setQuickCreateName(event.target.value)}
-                                placeholder="留空时自动生成"
+                                placeholder={creatingGroup?.group_name || creatingGroup?.group_key || '分组名'}
                                 disabled={createKeyMutation.isPending}
                                 className="h-10 rounded-2xl"
                             />
@@ -2478,31 +2607,42 @@ function SiteAccountPanel({
                                     {(() => {
                                         const rowId = projectedKeyRowId(item, index);
                                         const isVisible = item.is_new || Boolean(visibleSourceKeyRows[rowId]);
+                                        const isRemoteManaged = supportsRemoteKeyManagement && Boolean(item.external_id && item.external_id > 0);
+                                        const rowPending = siteKeyMutationPending || deletingRemoteKeyId === item.id;
 
                                         return (
                                             <>
                                     <div className="flex items-center justify-between gap-2">
-                                        <div className="text-xs text-muted-foreground">
-                                            {item.id ? `站点 Key #${item.id}` : '新站点 Key'}
-                                            {item.value_status === 'masked_pending' ? ' · 待补全' : ''}
+                                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                                            <span>{item.id ? `站点 Key #${item.id}` : '新站点 Key'}</span>
+                                            {isRemoteManaged ? (
+                                                <Badge variant="outline" className="h-5 border-primary/25 bg-primary/10 px-1.5 text-[10px] text-primary">
+                                                    上游直管
+                                                </Badge>
+                                            ) : (
+                                                <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                                                    本地兼容 Key
+                                                </Badge>
+                                            )}
+                                            {item.value_status === 'masked_pending' ? <span>· 待补全</span> : null}
                                         </div>
                                         <Button
                                             type="button"
                                             variant="ghost"
                                             size="sm"
                                             className="rounded-xl"
-                                            onClick={() => handleRemoveProjectedKeyRow(index)}
-                                            disabled={sourceKeyMutation.isPending}
+                                            onClick={() => isRemoteManaged ? handleDeleteRemoteProjectedKey(item) : handleRemoveProjectedKeyRow(index)}
+                                            disabled={rowPending}
                                         >
-                                            删除
+                                            {deletingRemoteKeyId === item.id ? '删除中...' : isRemoteManaged ? '从上游删除' : '删除'}
                                         </Button>
                                     </div>
-                                    <div className="mt-3 grid gap-3 md:grid-cols-[auto,1fr,12rem]">
+                                    <div className="mt-3 grid gap-3 md:grid-cols-[auto,minmax(0,1fr),12rem,12rem]">
                                         <label className="flex items-center gap-2 text-xs text-muted-foreground">
                                             <input
                                                 type="checkbox"
                                                 checked={item.enabled}
-                                                disabled={sourceKeyMutation.isPending}
+                                                disabled={rowPending}
                                                 onChange={(event) => handleProjectedKeyFieldChange(index, { enabled: event.target.checked })}
                                                 className="size-4 rounded border-border bg-background align-middle accent-primary"
                                             />
@@ -2515,8 +2655,9 @@ function SiteAccountPanel({
                                                     type={isVisible ? 'text' : 'password'}
                                                     value={item.token}
                                                     onChange={(event) => handleProjectedKeyFieldChange(index, { token: event.target.value })}
-                                                    placeholder={item.id ? '点击眼睛查看或直接修改完整 Key' : '输入新的站点 Key'}
-                                                    disabled={sourceKeyMutation.isPending}
+                                                    placeholder={item.id ? '点击眼睛查看完整 Key' : '输入新的站点 Key'}
+                                                    readOnly={isRemoteManaged}
+                                                    disabled={rowPending}
                                                     className="h-10 rounded-2xl"
                                                 />
                                                 <Button
@@ -2525,7 +2666,7 @@ function SiteAccountPanel({
                                                     size="icon"
                                                     className="size-10 rounded-2xl shrink-0"
                                                     onClick={() => handleToggleProjectedKeyVisibility(item, index)}
-                                                    disabled={sourceKeyMutation.isPending}
+                                                    disabled={rowPending}
                                                     aria-label={isVisible ? '隐藏完整 Key' : '显示完整 Key'}
                                                     title={isVisible ? '隐藏完整 Key' : '显示完整 Key'}
                                                 >
@@ -2542,11 +2683,31 @@ function SiteAccountPanel({
                                                 value={item.name}
                                                 onChange={(event) => handleProjectedKeyFieldChange(index, { name: event.target.value })}
                                                 placeholder="Key 名称"
-                                                disabled={sourceKeyMutation.isPending}
+                                                disabled={rowPending}
+                                                className="h-10 rounded-2xl"
+                                            />
+                                        </label>
+                                        <label className="grid gap-1.5 text-xs text-muted-foreground">
+                                            上游分组
+                                            <Input
+                                                value={item.group_key}
+                                                onChange={(event) => handleProjectedKeyFieldChange(index, { group_key: event.target.value })}
+                                                placeholder={editingProjectedGroup?.group_key || '分组 Key'}
+                                                readOnly={!isRemoteManaged}
+                                                disabled={rowPending}
                                                 className="h-10 rounded-2xl"
                                             />
                                         </label>
                                     </div>
+                                    {isRemoteManaged ? (
+                                        <div className="mt-2 text-[11px] text-muted-foreground">
+                                            名称和分组会直接写回上游站点；Key 明文由 Octopus 同步保存，无需手工投影更新。
+                                        </div>
+                                    ) : !supportsRemoteKeyManagement ? (
+                                        <div className="mt-2 text-[11px] text-muted-foreground">
+                                            当前平台不支持上游直管，保存只会更新 Octopus 本地兼容 Key。
+                                        </div>
+                                    ) : null}
                                     {item.last_sync_at ? (
                                         <div className="mt-2 text-[11px] text-muted-foreground">
                                             上次同步：{new Date(item.last_sync_at).toLocaleString()}
@@ -2564,9 +2725,9 @@ function SiteAccountPanel({
                             variant="outline"
                             className="rounded-2xl shrink-0"
                             onClick={handleAddProjectedKeyRow}
-                            disabled={sourceKeyMutation.isPending}
+                            disabled={siteKeyMutationPending}
                         >
-                            新增 Key
+                            新增本地兼容 Key
                         </Button>
                     </div>
 
@@ -2576,7 +2737,7 @@ function SiteAccountPanel({
                             variant="outline"
                             className="rounded-2xl"
                             onClick={handleCloseProjectedKeys}
-                            disabled={sourceKeyMutation.isPending}
+                            disabled={siteKeyMutationPending}
                         >
                             取消
                         </Button>
@@ -2584,10 +2745,10 @@ function SiteAccountPanel({
                             type="button"
                             className="rounded-2xl"
                             onClick={handleSaveProjectedKeys}
-                            disabled={sourceKeyMutation.isPending || !editingProjectedGroup || !hasSourceKeyChanges(editingProjectedGroup.source_keys, sourceKeyForm)}
+                            disabled={siteKeyMutationPending || !editingProjectedGroup || !hasSiteKeyChanges}
                         >
-                            <RefreshCw className={cn('size-4', sourceKeyMutation.isPending && 'animate-spin')} />
-                            {sourceKeyMutation.isPending ? '保存中...' : '保存站点 Key'}
+                            <RefreshCw className={cn('size-4', siteKeyMutationPending && 'animate-spin')} />
+                            {siteKeyMutationPending ? '保存中...' : '保存站点 Key'}
                         </Button>
                     </DialogFooter>
                 </DialogContent>
@@ -2822,6 +2983,7 @@ function SiteChannelDialog({
                         <SiteAccountPanel
                             key={resolvedAccount.account_id}
                             siteId={card.site_id}
+                            platform={card.platform}
                             account={resolvedAccount}
                             accounts={card.accounts}
                             activeAccountId={activeAccountId}

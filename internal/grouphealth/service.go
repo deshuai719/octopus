@@ -77,6 +77,24 @@ func resolveChannelName(ctx context.Context, channelID int) string {
 	return channel.Name
 }
 
+func newAttempt(item model.GroupItem, channelName string, metadata op.SiteChannelHealthMetadata, profile model.GroupHealthProbeProfile) model.GroupHealthAttempt {
+	return model.GroupHealthAttempt{
+		GroupItemID:          item.ID,
+		ChannelID:            item.ChannelID,
+		ChannelName:          channelName,
+		ModelName:            item.ModelName,
+		Priority:             item.Priority,
+		Weight:               item.Weight,
+		SiteID:               metadata.SiteID,
+		SiteName:             metadata.SiteName,
+		SiteTags:             append([]string(nil), metadata.SiteTags...),
+		SiteGroupName:        metadata.SiteGroupName,
+		SiteGroupRatio:       metadata.SiteGroupRatio,
+		SiteGroupRatioSeenAt: metadata.RatioLastSeenAt,
+		ProbeProfile:         profile,
+	}
+}
+
 func (s *Service) RunGroupHealth(ctx context.Context, groupID int, probeModes ...model.GroupHealthProbeMode) error {
 	unlock := lockGroup(groupID)
 	defer unlock()
@@ -94,11 +112,6 @@ func (s *Service) RunGroupHealth(ctx context.Context, groupID int, probeModes ..
 
 	probeMode := normalizeProbeMode(probeModes)
 
-	snapshot, err := s.repo.CreateRunningSnapshot(ctx, *group, probeMode)
-	if err != nil {
-		return err
-	}
-
 	items := append([]model.GroupItem(nil), group.Items...)
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Priority != items[j].Priority {
@@ -112,6 +125,19 @@ func (s *Service) RunGroupHealth(ctx context.Context, groupID int, probeModes ..
 		}
 		return items[i].ID < items[j].ID
 	})
+	channelIDs := make([]int, 0, len(items))
+	for _, item := range items {
+		channelIDs = append(channelIDs, item.ChannelID)
+	}
+	metadataByChannelID, err := op.SiteChannelHealthMetadataMapByChannelIDs(channelIDs, ctx)
+	if err != nil {
+		return fmt.Errorf("load group health site metadata: %w", err)
+	}
+
+	snapshot, err := s.repo.CreateRunningSnapshot(ctx, *group, probeMode)
+	if err != nil {
+		return err
+	}
 
 	var successfulChannelID *int
 	message := "all candidates failed"
@@ -122,19 +148,14 @@ func (s *Service) RunGroupHealth(ctx context.Context, groupID int, probeModes ..
 	successCount := 0
 
 	for index, item := range items {
+		metadata := metadataByChannelID[item.ChannelID]
 		channel, err := op.ChannelGet(item.ChannelID, ctx)
 		if err != nil {
 			attemptedCount++
-			appendErr := s.repo.AppendAttempt(ctx, snapshot.ID, model.GroupHealthAttempt{
-				GroupItemID:  item.ID,
-				ChannelID:    item.ChannelID,
-				ChannelName:  fmt.Sprintf("channel-%d", item.ChannelID),
-				ModelName:    item.ModelName,
-				Priority:     item.Priority,
-				Weight:       item.Weight,
-				Status:       model.GroupHealthAttemptStatusFailed,
-				ErrorMessage: fmt.Sprintf("failed to load channel: %v", err),
-			})
+			attempt := newAttempt(item, fmt.Sprintf("channel-%d", item.ChannelID), metadata, model.GroupHealthProbeProfileStandard)
+			attempt.Status = model.GroupHealthAttemptStatusFailed
+			attempt.ErrorMessage = fmt.Sprintf("failed to load channel: %v", err)
+			appendErr := s.repo.AppendAttempt(ctx, snapshot.ID, attempt)
 			if appendErr != nil {
 				return appendErr
 			}
@@ -142,39 +163,27 @@ func (s *Service) RunGroupHealth(ctx context.Context, groupID int, probeModes ..
 		}
 
 		usedKey := channel.GetChannelKey()
+		profile := selectProbeProfile(metadata.SiteTags, channel.Type)
 		if usedKey.ID == 0 || strings.TrimSpace(usedKey.ChannelKey) == "" {
 			attemptedCount++
-			appendErr := s.repo.AppendAttempt(ctx, snapshot.ID, model.GroupHealthAttempt{
-				GroupItemID:  item.ID,
-				ChannelID:    item.ChannelID,
-				ChannelName:  channel.Name,
-				ModelName:    item.ModelName,
-				Priority:     item.Priority,
-				Weight:       item.Weight,
-				Status:       model.GroupHealthAttemptStatusFailed,
-				ErrorMessage: "no available key",
-			})
+			attempt := newAttempt(item, channel.Name, metadata, profile)
+			attempt.Status = model.GroupHealthAttemptStatusFailed
+			attempt.ErrorMessage = "no available key"
+			appendErr := s.repo.AppendAttempt(ctx, snapshot.ID, attempt)
 			if appendErr != nil {
 				return appendErr
 			}
 			continue
 		}
 
-		result := s.prober.RunCandidate(ctx, *channel, usedKey, item.ModelName)
+		result := s.prober.RunCandidateWithProfile(ctx, *channel, usedKey, item.ModelName, profile)
 		attemptedCount++
-		attempt := model.GroupHealthAttempt{
-			GroupItemID:  item.ID,
-			ChannelID:    item.ChannelID,
-			ChannelName:  channel.Name,
-			ChannelKeyID: usedKey.ID,
-			KeyRemark:    usedKey.Remark,
-			ModelName:    item.ModelName,
-			Priority:     item.Priority,
-			Weight:       item.Weight,
-			HTTPStatus:   result.HTTPStatus,
-			DurationMS:   result.DurationMS,
-			ErrorMessage: result.ErrorMessage,
-		}
+		attempt := newAttempt(item, channel.Name, metadata, profile)
+		attempt.ChannelKeyID = usedKey.ID
+		attempt.KeyRemark = usedKey.Remark
+		attempt.HTTPStatus = result.HTTPStatus
+		attempt.DurationMS = result.DurationMS
+		attempt.ErrorMessage = result.ErrorMessage
 		if result.Success {
 			attempt.Status = model.GroupHealthAttemptStatusSuccess
 		} else {
@@ -193,19 +202,16 @@ func (s *Service) RunGroupHealth(ctx context.Context, groupID int, probeModes ..
 			}
 			if stopAfterSuccess {
 				for _, skipped := range items[index+1:] {
+					skippedMetadata := metadataByChannelID[skipped.ChannelID]
 					channelName := fmt.Sprintf("channel-%d", skipped.ChannelID)
+					skippedProfile := model.GroupHealthProbeProfileStandard
 					if skippedChannel, getErr := op.ChannelGet(skipped.ChannelID, ctx); getErr == nil {
 						channelName = skippedChannel.Name
+						skippedProfile = selectProbeProfile(skippedMetadata.SiteTags, skippedChannel.Type)
 					}
-					if err := s.repo.AppendAttempt(ctx, snapshot.ID, model.GroupHealthAttempt{
-						GroupItemID: skipped.ID,
-						ChannelID:   skipped.ChannelID,
-						ChannelName: channelName,
-						ModelName:   skipped.ModelName,
-						Priority:    skipped.Priority,
-						Weight:      skipped.Weight,
-						Status:      model.GroupHealthAttemptStatusSkipped,
-					}); err != nil {
+					skippedAttempt := newAttempt(skipped, channelName, skippedMetadata, skippedProfile)
+					skippedAttempt.Status = model.GroupHealthAttemptStatusSkipped
+					if err := s.repo.AppendAttempt(ctx, snapshot.ID, skippedAttempt); err != nil {
 						return err
 					}
 				}

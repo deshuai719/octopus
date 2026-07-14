@@ -303,6 +303,7 @@ const (
 type SiteToken struct {
 	ID            int                  `json:"id" gorm:"primaryKey"`
 	SiteAccountID int                  `json:"site_account_id" gorm:"index;not null"`
+	ExternalID    int64                `json:"external_id" gorm:"column:external_id;-:migration"`
 	Name          string               `json:"name"`
 	Token         string               `json:"token" gorm:"not null"`
 	ValueStatus   SiteTokenValueStatus `json:"value_status" gorm:"type:varchar(32);not null;default:'ready'"`

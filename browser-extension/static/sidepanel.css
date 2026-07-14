@@ -9,6 +9,8 @@
   --night: #101d2d;
 }
 
+[hidden] { display: none !important; }
+
 * { box-sizing: border-box; }
 
 body {
