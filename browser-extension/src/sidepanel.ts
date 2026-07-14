@@ -1,4 +1,4 @@
-import { grantPermissionAndOpenTarget, runWithTargetPermission, runWithTemporaryPagePermission } from "./permissions";
+import { grantPermissionAndOpenTarget, runWithRoutedPagePermission, runWithTargetPermission } from "./permissions";
 import { clearDiagnostics, formatDiagnostics, listDiagnostics } from "./diagnostics";
 import { httpOriginFromURL } from "./packet";
 import { candidateDeliveredView, loginRequiredView, readingView, readyView, requestingPermissionView, retryExtractionView, submittingView, waitingView } from "./panel-state";
@@ -164,9 +164,7 @@ async function refreshCapturePageOrigin(): Promise<void> {
   currentOrigin = capturePageOrigin;
 }
 
-async function refreshActiveContext(): Promise<void> {
-  await refreshCapturePageOrigin();
-  const response = await send({ type: "get_active_context", origin: capturePageOrigin });
+function renderActiveContextResponse(response: WorkerResponse): void {
   if (response.packet) renderPacket(response.packet);
   else if (response.capture) renderCapture(response.capture);
   else if (response.mode === "binding") {
@@ -187,14 +185,18 @@ async function refreshActiveContext(): Promise<void> {
   }
 }
 
+async function refreshActiveContext(): Promise<void> {
+  await refreshCapturePageOrigin();
+  renderActiveContextResponse(await send({ type: "get_active_context", origin: capturePageOrigin }));
+}
+
 async function captureActiveSession(): Promise<void> {
   const expectedOrigin = capturePageOrigin;
   if (!expectedOrigin) return renderView(waitingView("当前标签页不是可访问的 HTTP(S) 页面。"));
   renderView(readingView());
   try {
-    const response = await runWithTemporaryPagePermission(expectedOrigin, () => send({ type: "capture_active_session", expected_origin: expectedOrigin }));
-    if (response.packet) renderPacket(response.packet);
-    else renderView(waitingView(response.message));
+    const response = await runWithRoutedPagePermission(expectedOrigin, () => send({ type: "capture_active_session", expected_origin: expectedOrigin }));
+    renderActiveContextResponse(response);
   } catch (error) {
     renderView(waitingView(error instanceof Error ? error.message : "无法读取当前标签页"));
   }

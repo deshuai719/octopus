@@ -44,6 +44,11 @@ beforeEach(() => {
     scripting: { executeScript: vi.fn(() => scriptResult) },
     sidePanel: { open: openPanel },
     storage: {
+      local: {
+        get: vi.fn(async () => ({})),
+        set: vi.fn(async () => undefined),
+        remove: vi.fn(async () => undefined),
+      },
       session: {
         get: vi.fn(async (key: string) => ({ [key]: stored[key] })),
         set: vi.fn(async (value: Record<string, unknown>) => Object.assign(stored, value)),
@@ -108,5 +113,31 @@ describe("toolbar entry", () => {
       message: "当前标签页已切换，请重新点击读取",
     });
     expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
+    expect(chrome.permissions.remove).toHaveBeenCalledWith({
+      origins: ["https://octopus.example.com/*"],
+    });
+  });
+
+  it("keeps a valid legacy recovery packet on the side-panel route", async () => {
+    await import("../src/worker");
+    queryTabs.mockResolvedValue([
+      { id: 5, url: "https://octopus.example.com/sites" } as chrome.tabs.Tab,
+    ]);
+
+    const responsePromise = new Promise<unknown>((resolve) => {
+      messageHandler!(
+        { type: "capture_active_session", expected_origin: "https://octopus.example.com" },
+        {} as chrome.runtime.MessageSender,
+        resolve,
+      );
+    });
+    resolveScript!([{ result: packet }]);
+
+    await expect(responsePromise).resolves.toEqual({
+      ok: true,
+      mode: "legacy",
+      origin: "https://octopus.example.com",
+      packet,
+    });
   });
 });

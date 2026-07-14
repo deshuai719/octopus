@@ -17,19 +17,22 @@ export function grantPermissionAndOpenTarget(
   return runWithTargetPermission(origin, openTarget);
 }
 
-export async function runWithTemporaryPagePermission(
+export async function runWithRoutedPagePermission(
   origin: string,
   action: () => Promise<WorkerResponse>,
 ): Promise<WorkerResponse> {
-  // Start the request before the first await so Chromium still sees the side-panel click as a user gesture.
   const permission = { origins: [permissionPattern(origin)] };
-  const permissionRequest = chrome.permissions.request(permission);
-  const granted = await permissionRequest;
+  const granted = await chrome.permissions.request(permission);
   if (!granted) return { ok: false, message: "未获得当前页面临时权限" };
   try {
+    // The worker owns the successful lifecycle: Octopus binding retains the
+    // origin, while direct capture and legacy recovery revoke it when done.
     return await action();
-  } finally {
+  } catch (error) {
     const removed = await chrome.permissions.remove(permission);
-    if (!removed) throw new Error("无法撤销当前页面临时权限，请在扩展设置中手动移除");
+    if (!removed) {
+      throw new Error("扩展通信失败，且无法撤销当前页面权限；请在扩展设置中手动移除", { cause: error });
+    }
+    throw error;
   }
 }

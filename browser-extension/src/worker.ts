@@ -60,12 +60,22 @@ async function revokeDirectPermission(origin: string): Promise<void> {
   await chrome.permissions.remove({ origins: [permissionPattern(origin)] });
 }
 
-async function readPacketFromPage(tabId: number): Promise<RecoveryPacket> {
+async function revokePermissionUnlessBound(origin: string): Promise<void> {
+  const binding = await getOctopusBinding();
+  if (binding?.origin !== origin) await revokeDirectPermission(origin);
+}
+
+type RecoveryPacketPageResult =
+  | { kind: "missing" }
+  | { kind: "invalid_json" }
+  | { kind: "packet"; value: unknown };
+
+async function readPacketFromPage(tabId: number): Promise<RecoveryPacket | undefined> {
   const [{ result }] = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => {
       const node = document.querySelector<HTMLScriptElement>('script[data-octopus-recovery="true"]');
-      if (!node?.textContent) throw new Error("当前页面没有可读取的 Octopus 恢复会话");
+      if (!node?.textContent) return { kind: "missing" } as const;
       const bridgeWindow = window as Window & { __octopusRecoveryBridge?: boolean };
       if (!bridgeWindow.__octopusRecoveryBridge) {
         bridgeWindow.__octopusRecoveryBridge = true;
@@ -84,10 +94,23 @@ async function readPacketFromPage(tabId: number): Promise<RecoveryPacket> {
           }
         });
       }
-      return JSON.parse(node.textContent) as unknown;
+      try {
+        return { kind: "packet", value: JSON.parse(node.textContent) as unknown } as const;
+      } catch {
+        return { kind: "invalid_json" } as const;
+      }
     },
   });
-  return parseRecoveryPacket(result);
+  const pageResult = result as RecoveryPacketPageResult | RecoveryPacket | undefined;
+  if (!pageResult || typeof pageResult !== "object") throw new Error("恢复会话读取结果无效");
+  if ("kind" in pageResult) {
+    if (pageResult.kind === "missing") return undefined;
+    if (pageResult.kind === "invalid_json") throw new Error("恢复会话 JSON 无效");
+    return parseRecoveryPacket(pageResult.value);
+  }
+  // Accept the unwrapped result used by already-open extension pages during a
+  // service-worker update; the next page read always uses the tagged shape.
+  return parseRecoveryPacket(pageResult);
 }
 
 async function notifyPanel(event: SessionEvent): Promise<void> {
@@ -206,55 +229,39 @@ async function startDirectCapture(tabId: number, origin: string): Promise<Worker
   return submitDirectPreview(binding, operationID, origin, discovery.platform, discovery.evidence, extracted);
 }
 
-async function routeClickedTab(tab: chrome.tabs.Tab, permissionPromise: Promise<boolean>): Promise<void> {
+async function routeClickedTab(tab: chrome.tabs.Tab, permissionPromise: Promise<boolean>): Promise<WorkerResponse> {
   const origin = canonicalHTTPOrigin(tab.url);
   const operationID = crypto.randomUUID();
   try {
     if (!tab.id) throw new Error("无法读取当前标签页");
     const granted = await permissionPromise;
     if (!granted) throw new Error("未获得当前站点权限");
-    try {
-      const packet = await readPacketFromPage(tab.id);
+    const packet = await readPacketFromPage(tab.id);
+    if (packet) {
       await storeRecoverySession(packet);
       await chrome.storage.session.remove(RECOVERY_ERROR_KEY);
       await notifyPanel({ type: "session_updated", packet });
-      if (origin) {
-        const binding = await getOctopusBinding();
-        if (binding?.origin !== origin) await chrome.permissions.remove({ origins: [permissionPattern(origin)] });
-      }
-      return;
-    } catch {
-      // The page can still be an Octopus initialization page or a direct target.
+      if (origin) await revokePermissionUnlessBound(origin);
+      return { ok: true, mode: "legacy", origin, packet };
     }
     if (!origin) throw new Error("当前标签页不是可访问的 HTTP(S) 页面");
     const pageAuth = await readPageAuth(tab.id);
     if (pageAuth) {
-      await initializeOctopusBinding(origin, pageAuth);
-      return;
+      const response = await initializeOctopusBinding(origin, pageAuth);
+      await chrome.storage.session.remove(RECOVERY_ERROR_KEY);
+      return response;
     }
     const response = await startDirectCapture(tab.id, origin);
     if (!response.ok) throw new Error(response.message ?? "直接捕获失败");
+    await chrome.storage.session.remove(RECOVERY_ERROR_KEY);
+    return response;
   } catch (error) {
     const message = sanitizeDiagnosticMessage(error);
     await chrome.storage.session.set({ [RECOVERY_ERROR_KEY]: message });
     await recordDiagnostic({ at: new Date().toISOString(), operation_id: operationID, origin, error_code: (error as { error_code?: string })?.error_code ?? "extension.capture.failed", stage: (error as { stage?: string })?.stage ?? "credential_extraction", suggested_action: (error as { suggested_action?: string })?.suggested_action, http_status: (error as { http_status?: number })?.http_status, message });
     await notifyPanel({ type: "session_error", message });
-    if (origin) await revokeDirectPermission(origin);
-  }
-}
-
-async function captureRecoverySession(tabId: number): Promise<WorkerResponse> {
-  try {
-    const packet = await readPacketFromPage(tabId);
-    await storeRecoverySession(packet);
-    await chrome.storage.session.remove(RECOVERY_ERROR_KEY);
-    await notifyPanel({ type: "session_updated", packet });
-    return { ok: true, packet };
-  } catch (error) {
-    const message = errorMessage(error);
-    await chrome.storage.session.set({ [RECOVERY_ERROR_KEY]: message });
-    await notifyPanel({ type: "session_error", message });
-    return { ok: false, message };
+    if (origin) await revokePermissionUnlessBound(origin);
+    return { ok: false, origin, message };
   }
 }
 
@@ -409,12 +416,22 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, sender, sendRespon
         return;
       }
       if (request.type === "capture_active_session") {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!tab?.id) throw new Error("无法读取当前标签页");
-        if (httpOriginFromURL(tab.url) !== request.expected_origin) {
-          throw new Error("当前标签页已切换，请重新点击读取");
+        let tab: chrome.tabs.Tab;
+        try {
+          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (!activeTab?.id) throw new Error("无法读取当前标签页");
+          const activeOrigin = httpOriginFromURL(activeTab.url);
+          if (activeOrigin !== request.expected_origin) {
+            throw new Error("当前标签页已切换，请重新点击读取");
+          }
+          const hasPermission = await chrome.permissions.contains({ origins: [permissionPattern(activeOrigin)] });
+          if (!hasPermission) throw new Error("当前页面权限不存在，请重新点击读取");
+          tab = activeTab;
+        } catch (error) {
+          await revokePermissionUnlessBound(request.expected_origin);
+          throw error;
         }
-        sendResponse(await captureRecoverySession(tab.id));
+        sendResponse(await routeClickedTab(tab, Promise.resolve(true)));
         return;
       }
       if (request.type === "discard_session") {

@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   grantPermissionAndOpenTarget,
+  runWithRoutedPagePermission,
   runWithTargetPermission,
-  runWithTemporaryPagePermission,
 } from "../src/permissions";
 
 let requestPermission: ReturnType<typeof vi.fn<(permissions: chrome.permissions.Permissions) => Promise<boolean>>>;
@@ -63,27 +63,30 @@ describe("target origin permission", () => {
     expect(calls).toEqual(["permission", "extract"]);
   });
 
-  it("grants the Octopus page only for the duration of session capture", async () => {
-    const calls: string[] = [];
-    requestPermission.mockImplementation(async () => {
-      calls.push("permission");
-      return true;
-    });
-    const removePermission = vi.fn(async () => {
-      calls.push("remove");
-      return true;
-    });
+  it("leaves successful routed-page permission lifecycle to the worker", async () => {
+    const removePermission = vi.fn(async () => true);
     chrome.permissions.remove = removePermission;
-    const capture = vi.fn(async () => {
-      calls.push("capture");
-      return { ok: true };
-    });
 
-    const response = await runWithTemporaryPagePermission("https://octopus.example.com", capture);
+    const response = await runWithRoutedPagePermission(
+      "https://octopus.example.com",
+      async () => ({ ok: true, mode: "binding" }),
+    );
 
-    expect(response).toEqual({ ok: true });
-    expect(requestPermission).toHaveBeenCalledWith({ origins: ["https://octopus.example.com/*"] });
-    expect(removePermission).toHaveBeenCalledWith({ origins: ["https://octopus.example.com/*"] });
-    expect(calls).toEqual(["permission", "capture", "remove"]);
+    expect(response).toEqual({ ok: true, mode: "binding" });
+    expect(removePermission).not.toHaveBeenCalled();
   });
+
+  it("revokes routed-page permission when worker communication fails", async () => {
+    const removePermission = vi.fn(async () => true);
+    chrome.permissions.remove = removePermission;
+    const failure = new Error("worker unavailable");
+
+    await expect(runWithRoutedPagePermission(
+      "https://site.example.com",
+      async () => { throw failure; },
+    )).rejects.toBe(failure);
+
+    expect(removePermission).toHaveBeenCalledWith({ origins: ["https://site.example.com/*"] });
+  });
+
 });

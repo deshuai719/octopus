@@ -11,6 +11,7 @@ let executeScript: ReturnType<typeof vi.fn>;
 let fetchMock: ReturnType<typeof vi.fn>;
 let localValues: Record<string, unknown>;
 let sessionValues: Record<string, unknown>;
+let queryTabs: ReturnType<typeof vi.fn<() => Promise<chrome.tabs.Tab[]>>>;
 
 function responseAt(url: string, body: string, init: ResponseInit = {}) {
   const response = new Response(body, init);
@@ -31,8 +32,9 @@ beforeEach(() => {
   };
   localValues = { [OCTOPUS_BINDING_KEY]: binding };
   sessionValues = {};
+  queryTabs = vi.fn(async () => []);
   executeScript = vi.fn()
-    .mockRejectedValueOnce(new Error("no recovery packet"))
+    .mockResolvedValueOnce([{ result: { kind: "missing" } }])
     .mockResolvedValueOnce([{ result: undefined }])
     .mockResolvedValueOnce([{ result: {
       platform: "new-api",
@@ -89,12 +91,92 @@ beforeEach(() => {
       onMessage: { addListener: vi.fn((handler) => { messageHandler = handler; }) },
       sendMessage: vi.fn(async () => undefined),
     },
-    tabs: { query: vi.fn(async () => []), create: vi.fn(), update: vi.fn() },
+    tabs: { query: queryTabs, create: vi.fn(), update: vi.fn() },
     cookies: { get: vi.fn(async () => null) },
   });
 });
 
 describe("direct capture worker flow", () => {
+  it("routes a side-panel page read through Octopus binding and clears a stale recovery error", async () => {
+    sessionValues.octopusRecoveryError = "恢复会话格式无效";
+    executeScript.mockReset()
+      .mockResolvedValueOnce([{ result: { kind: "missing" } }])
+      .mockResolvedValueOnce([{ result: {
+        token: "fresh-administrator-jwt",
+        expire_at: "2099-01-01T00:00:00Z",
+        is_api_key_auth: false,
+      } }]);
+    queryTabs.mockResolvedValue([
+      { id: 8, windowId: 3, url: "https://octopus.example/settings" } as chrome.tabs.Tab,
+    ]);
+    await import("../src/worker");
+
+    const response = await new Promise<WorkerResponse>((resolve) => {
+      messageHandler!(
+        { type: "capture_active_session", expected_origin: "https://octopus.example" },
+        {} as chrome.runtime.MessageSender,
+        resolve,
+      );
+    });
+
+    expect(response).toMatchObject({ ok: true, mode: "binding", origin: "https://octopus.example" });
+    expect(sessionValues.octopusRecoveryError).toBeUndefined();
+    expect(chrome.permissions.remove).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports malformed recovery JSON instead of falling through to direct capture", async () => {
+    executeScript.mockReset().mockResolvedValueOnce([{ result: { kind: "invalid_json" } }]);
+    queryTabs.mockResolvedValue([
+      { id: 7, windowId: 3, url: "https://relay.example/console" } as chrome.tabs.Tab,
+    ]);
+    await import("../src/worker");
+
+    const response = await new Promise<WorkerResponse>((resolve) => {
+      messageHandler!(
+        { type: "capture_active_session", expected_origin: "https://relay.example" },
+        {} as chrome.runtime.MessageSender,
+        resolve,
+      );
+    });
+
+    expect(response).toEqual({
+      ok: false,
+      origin: "https://relay.example",
+      message: "恢复会话 JSON 无效",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(chrome.permissions.remove).toHaveBeenCalledWith({
+      origins: ["https://relay.example/*"],
+    });
+  });
+
+  it("routes a side-panel page read through direct capture when no recovery packet exists", async () => {
+    queryTabs.mockResolvedValue([
+      { id: 7, windowId: 3, url: "https://relay.example/console" } as chrome.tabs.Tab,
+    ]);
+    await import("../src/worker");
+
+    const response = await new Promise<WorkerResponse>((resolve) => {
+      messageHandler!(
+        { type: "capture_active_session", expected_origin: "https://relay.example" },
+        {} as chrome.runtime.MessageSender,
+        resolve,
+      );
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      mode: "direct",
+      origin: "https://relay.example",
+      capture: { phase: "preview_ready" },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(chrome.permissions.remove).toHaveBeenCalledWith({
+      origins: ["https://relay.example/*"],
+    });
+  });
+
   it("submits structural evidence and never persists the raw candidate", async () => {
     await import("../src/worker");
     actionHandler!({ id: 7, windowId: 3, url: "https://relay.example/console" } as chrome.tabs.Tab);
