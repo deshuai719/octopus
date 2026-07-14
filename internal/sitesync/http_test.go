@@ -129,8 +129,8 @@ func TestRequestJSONKeepsJSONForbiddenMessage(t *testing.T) {
 	if err.Error() != "http 403: token forbidden" {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := apperror.Code(err); got != CodeSiteUpstreamHTTPError {
-		t.Fatalf("expected error code %q, got %q", CodeSiteUpstreamHTTPError, got)
+	if got := apperror.Code(err); got != CodeSiteUpstreamPermissionDenied {
+		t.Fatalf("expected error code %q, got %q", CodeSiteUpstreamPermissionDenied, got)
 	}
 	if got := apperror.Params(err)["statusCode"]; got != http.StatusForbidden {
 		t.Fatalf("expected statusCode param %d, got %#v", http.StatusForbidden, got)

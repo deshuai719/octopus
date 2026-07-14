@@ -68,7 +68,6 @@ async function handleResponse<T>(response: Response): Promise<T> {
         const error: ApiError = {
             code: response.status,
             errorCode,
-            rawMessage,
             params: errorParams,
             message: translateApiErrorCode(errorCode, rawMessage, errorParams),
         };
@@ -160,4 +159,3 @@ export const apiClient = {
     patch: <T>(path: string, data?: unknown, params?: Record<string, string | number | boolean>): Promise<T> =>
         request<T>('PATCH', path, data ? JSON.stringify(data) : undefined, params),
 };
-

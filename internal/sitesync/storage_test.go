@@ -347,6 +347,61 @@ func TestPersistSyncSnapshotPreservesGroupProjectionDisabled(t *testing.T) {
 	}
 }
 
+func TestPersistSyncSnapshotWithAccountUpdatesRollsBackTogether(t *testing.T) {
+	ctx := setupProjectTestDB(t)
+	_, account := createProjectionFixture(t, ctx)
+
+	previousGroup := model.SiteUserGroup{
+		SiteAccountID: account.ID,
+		GroupKey:      model.SiteDefaultGroupKey,
+		Name:          "Previous",
+	}
+	if err := dbpkg.GetDB().WithContext(ctx).Create(&previousGroup).Error; err != nil {
+		t.Fatalf("create previous group failed: %v", err)
+	}
+	if err := dbpkg.GetDB().WithContext(ctx).Model(account).Updates(map[string]any{
+		"auth_status":          model.SiteAuthStatusReauthRequired,
+		"auth_failure_code":    CodeSiteAuthReauthRequired,
+		"auth_failure_message": "login required",
+	}).Error; err != nil {
+		t.Fatalf("seed previous auth state failed: %v", err)
+	}
+
+	now := time.Unix(1_750_000_000, 0)
+	snapshot := &syncSnapshot{
+		accessToken: "candidate-access-token",
+		groups: []model.SiteUserGroup{
+			{GroupKey: model.SiteDefaultGroupKey, Name: "Duplicate A"},
+			{GroupKey: model.SiteDefaultGroupKey, Name: "Duplicate B"},
+		},
+		status:  model.SiteExecutionStatusSuccess,
+		message: "must roll back",
+	}
+	err := persistSyncSnapshotWithAccountUpdates(ctx, account.ID, snapshot, now, accountAuthSuccessUpdates(now))
+	if err == nil {
+		t.Fatal("expected duplicate group keys to fail the transaction")
+	}
+
+	reloaded, err := op.SiteAccountGet(account.ID, ctx)
+	if err != nil {
+		t.Fatalf("reload account failed: %v", err)
+	}
+	if reloaded.AuthStatus != model.SiteAuthStatusReauthRequired || reloaded.AuthFailureCode != CodeSiteAuthReauthRequired {
+		t.Fatalf("auth state changed despite rollback: status=%q code=%q", reloaded.AuthStatus, reloaded.AuthFailureCode)
+	}
+	if reloaded.AccessToken == "candidate-access-token" || reloaded.LastSyncMessage == snapshot.message {
+		t.Fatalf("credentials or snapshot changed despite rollback: token=%q message=%q", reloaded.AccessToken, reloaded.LastSyncMessage)
+	}
+
+	var groups []model.SiteUserGroup
+	if err := dbpkg.GetDB().WithContext(ctx).Where("site_account_id = ?", account.ID).Find(&groups).Error; err != nil {
+		t.Fatalf("reload groups failed: %v", err)
+	}
+	if len(groups) != 1 || groups[0].Name != "Previous" {
+		t.Fatalf("previous snapshot was not restored by rollback: %+v", groups)
+	}
+}
+
 func TestPersistSyncSnapshotReplacesOnlyAuthoritativeGroups(t *testing.T) {
 	ctx := setupProjectTestDB(t)
 	_, account := createProjectionFixture(t, ctx)

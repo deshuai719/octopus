@@ -186,9 +186,10 @@ func syncSub2API(ctx context.Context, siteRecord *model.Site, account *model.Sit
 	snapshot, err := syncSub2APIWithAccessToken(ctx, siteRecord, account, accessToken)
 	if err != nil && shouldRetrySub2APIAfterRefresh(err, account) {
 		refreshedToken, refreshErr := ensureFreshSub2APIAccessToken(ctx, siteRecord, account, true)
-		if refreshErr == nil && stripBearerPrefix(refreshedToken) != stripBearerPrefix(accessToken) {
-			return syncSub2APIWithAccessToken(ctx, siteRecord, account, refreshedToken)
+		if refreshErr != nil {
+			return snapshot, refreshErr
 		}
+		return syncSub2APIWithAccessToken(ctx, siteRecord, account, refreshedToken)
 	}
 	return snapshot, err
 }

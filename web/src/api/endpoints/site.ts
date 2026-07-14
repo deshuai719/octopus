@@ -105,6 +105,13 @@ export type SiteAccount = {
   last_checkin_status: string;
   last_sync_message: string;
   last_checkin_message: string;
+  auth_status: SiteAuthStatus;
+  auth_failure_code: string;
+  auth_failure_message: string;
+  auth_failure_stage: string;
+  consecutive_auth_failures: number;
+  last_auth_success_at?: string | null;
+  last_auth_failure_at?: string | null;
   balance: number;
   balance_used: number;
   today_income: number;
@@ -112,6 +119,74 @@ export type SiteAccount = {
   user_groups: SiteUserGroup[];
   models: SiteModel[];
   channel_bindings: SiteChannelBinding[];
+};
+
+export type SiteAuthStatus =
+  | "unknown"
+  | "valid"
+  | "refreshing"
+  | "suspected_expired"
+  | "reauth_required"
+  | "recovering"
+  | "verification_failed";
+
+export type CredentialField =
+  | "access_token"
+  | "refresh_token"
+  | "token_expires_at"
+  | "platform_user_id";
+
+export type PlatformAuthCapability = {
+  platform: SitePlatform;
+  compatible_family: string;
+  recommended_credential: SiteCredentialType;
+  required_fields: CredentialField[];
+  extractable_fields: CredentialField[];
+  supports_refresh: boolean;
+  validation_probe: {
+    method: string;
+    paths: string[];
+    requires_user_id: boolean;
+    compatible_family: string;
+    runtime_validation: boolean;
+  };
+  recovery_guide: {
+    title: string;
+    steps: string[];
+    manual_fallback: string;
+  };
+};
+
+export type RecoveryCandidateSummary = {
+  credential_type: SiteCredentialType;
+  access_token_mask: string;
+  has_refresh_token: boolean;
+  token_expires_at?: number;
+  platform_user_id?: number | null;
+  identity_label?: string;
+  identity_changed: boolean;
+};
+
+export type RecoverySession = {
+  id: string;
+  account_id: number;
+  site_id: number;
+  origin: string;
+  platform: SitePlatform;
+  phase:
+    | "awaiting_login"
+    | "validating"
+    | "candidate_ready"
+    | "verification_failed"
+    | "confirming"
+    | "completed"
+    | "canceled";
+  expires_at: string;
+  capability?: string;
+  auth: PlatformAuthCapability;
+  candidate?: RecoveryCandidateSummary;
+  error_code?: string;
+  error_message?: string;
 };
 
 export type Site = {
@@ -398,6 +473,13 @@ export function useCreateSiteAccount() {
         | "last_checkin_status"
         | "last_sync_message"
         | "last_checkin_message"
+        | "auth_status"
+        | "auth_failure_code"
+        | "auth_failure_message"
+        | "auth_failure_stage"
+        | "consecutive_auth_failures"
+        | "last_auth_success_at"
+        | "last_auth_failure_at"
         | "balance"
         | "balance_used"
         | "today_income"
@@ -464,6 +546,58 @@ export function useCheckinSiteAccount() {
       ),
     onSuccess: () => invalidateSiteQueries(queryClient),
     onError: (error) => logger.error("站点账号签到失败:", error),
+  });
+}
+
+export function useCreateSiteAuthRecovery() {
+  return useMutation({
+    mutationFn: async (accountId: number) =>
+      apiClient.post<RecoverySession>(
+        `/api/v1/site/account/${accountId}/auth-recovery`,
+        {},
+      ),
+    onError: (error) => logger.error("创建账号恢复会话失败:", error),
+  });
+}
+
+export function useSiteAuthRecovery(sessionId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: ["sites", "auth-recovery", sessionId],
+    queryFn: async () =>
+      apiClient.get<RecoverySession>(
+        `/api/v1/site/auth-recovery/${sessionId}`,
+      ),
+    enabled: enabled && Boolean(sessionId),
+    refetchInterval: (query) => {
+      const phase = query.state.data?.phase;
+      return phase === "awaiting_login" || phase === "validating" ? 2_000 : false;
+    },
+  });
+}
+
+export function useConfirmSiteAuthRecovery() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (sessionId: string) =>
+      apiClient.post<RecoverySession>(
+        `/api/v1/site/auth-recovery/${sessionId}/confirm`,
+        {},
+      ),
+    onSuccess: () => invalidateSiteQueries(queryClient),
+    onError: (error) => logger.error("确认账号恢复失败:", error),
+  });
+}
+
+export function useCancelSiteAuthRecovery() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (sessionId: string) =>
+      apiClient.post<RecoverySession>(
+        `/api/v1/site/auth-recovery/${sessionId}/cancel`,
+        {},
+      ),
+    onSuccess: () => invalidateSiteQueries(queryClient),
+    onError: (error) => logger.error("取消账号恢复失败:", error),
   });
 }
 
@@ -621,7 +755,13 @@ export function useImportMetAPI() {
 export function useDetectSitePlatform() {
   return useMutation({
     mutationFn: async (url: string) =>
-      apiClient.post<{ platform: string; default_route_type?: string }>("/api/v1/site/detect", { url }),
+      apiClient.post<{
+        platform: string;
+        default_route_type?: string;
+        confidence: number;
+        evidence: string[];
+        requires_confirmation: boolean;
+      }>("/api/v1/site/detect", { url }),
     onError: (error) => logger.error("平台检测失败:", error),
   });
 }

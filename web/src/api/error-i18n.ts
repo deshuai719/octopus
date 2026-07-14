@@ -43,6 +43,12 @@ function interpolate(template: string, values?: ErrorValues): string {
     });
 }
 
+function structuredErrorFallback(locale: Locale): string {
+    if (locale === 'zh_hans') return '操作失败，请稍后重试。';
+    if (locale === 'zh_hant') return '操作失敗，請稍後重試。';
+    return 'The operation failed. Please try again later.';
+}
+
 export function translateApiErrorCode(
     errorCode: string | null | undefined,
     fallback: string,
@@ -56,5 +62,5 @@ export function translateApiErrorCode(
         .map((source) => lookupMessage(source, normalizedCode))
         .find((message): message is string => Boolean(message));
 
-    return translated ? interpolate(translated, values) : fallback;
+    return translated ? interpolate(translated, values) : structuredErrorFallback(locale);
 }

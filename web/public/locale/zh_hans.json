@@ -1026,12 +1026,35 @@
                 "access_token_required": "站点 Access Token 不能为空。",
                 "direct_token_required": "站点 Direct Token 不能为空。",
                 "login_failed": "站点登录失败，请检查账号、密码或站点状态。",
-                "login_token_missing": "站点登录成功但未返回 Access Token，请检查站点兼容性。"
+                "login_token_missing": "站点登录成功但未返回 Access Token，请检查站点兼容性。",
+                "credential_expired": "站点凭据已过期，请重新登录。",
+                "credential_revoked": "站点凭据已被撤销，请重新登录。",
+                "refresh_failed_retryable": "站点凭据刷新暂时失败，请稍后重试。",
+                "refresh_failed_terminal": "站点凭据无法刷新，请重新登录。",
+                "reauth_required": "站点账号需要重新登录。",
+                "identity_mismatch": "当前登录身份与原账号不一致，请确认后再保存。"
+            },
+            "platform": {
+                "detect_inconclusive": "无法可靠识别站点平台，请手动选择。",
+                "incompatible": "该站点不支持所需的认证恢复能力。"
+            },
+            "recovery": {
+                "not_found": "恢复会话不存在或已经过期。",
+                "expired": "恢复会话已经过期，请重新创建。",
+                "invalid": "恢复候选数据无效，请重新创建会话。",
+                "forbidden": "恢复会话校验失败，请重新创建。",
+                "replay": "该恢复 capability 已经使用，不能重复提交。",
+                "conflict": "账号或恢复会话已发生变化，请重新开始。",
+                "rate_limited": "恢复请求过于频繁，请稍后重试。"
             },
             "upstream": {
                 "http_error": "站点上游请求失败（HTTP {statusCode}），请检查站点状态或稍后重试。",
                 "decode_failed": "站点响应解析失败，请检查站点兼容性或稍后重试。",
-                "cloudflare_challenge": "站点触发 Cloudflare 保护，请稍后重试，或手动访问站点完成验证。"
+                "cloudflare_challenge": "站点触发 Cloudflare 保护，请稍后重试，或手动访问站点完成验证。",
+                "permission_denied": "站点拒绝了当前操作，请检查账号权限。",
+                "rate_limited": "站点触发限速，请稍后重试。",
+                "network_error": "无法连接站点，请检查网络后重试。",
+                "server_error": "站点服务暂时异常，请稍后重试。"
             },
             "import": {
                 "invalid_json": "导入内容不是有效的 JSON，请检查文件格式或粘贴内容。",

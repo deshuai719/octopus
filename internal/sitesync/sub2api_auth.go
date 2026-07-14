@@ -2,12 +2,16 @@ package sitesync
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/bestruirui/octopus/internal/apperror"
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/model"
+	"golang.org/x/sync/singleflight"
 )
 
 const sub2APIAccessTokenRefreshLead = 5 * time.Minute
@@ -17,6 +21,8 @@ type sub2APIRefreshedCredentials struct {
 	RefreshToken   string
 	TokenExpiresAt int64
 }
+
+var sub2APIRefreshGroup singleflight.Group
 
 func ensureFreshSub2APIAccessToken(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, forceRefresh bool) (string, error) {
 	if account == nil {
@@ -31,17 +37,13 @@ func ensureFreshSub2APIAccessToken(ctx context.Context, siteRecord *model.Site, 
 		return accessToken, nil
 	}
 	if strings.TrimSpace(account.RefreshToken) == "" {
-		return accessToken, nil
-	}
-
-	refreshed, err := refreshSub2APIManagedSession(ctx, siteRecord, account, accessToken)
-	if err != nil {
 		if forceRefresh {
-			return "", err
+			return "", newSiteReauthRequiredError("sub2api refresh token is missing")
 		}
 		return accessToken, nil
 	}
-	return refreshed, nil
+
+	return refreshSub2APIManagedSession(ctx, siteRecord, account, accessToken)
 }
 
 func shouldProactivelyRefreshSub2API(account *model.SiteAccount) bool {
@@ -61,17 +63,15 @@ func shouldRetrySub2APIAfterRefresh(err error, account *model.SiteAccount) bool 
 	if err == nil || account == nil || strings.TrimSpace(account.RefreshToken) == "" {
 		return false
 	}
-	text := strings.ToLower(strings.TrimSpace(err.Error()))
-	if text == "" {
+	if siteErrorStatusCode(err) == 401 {
+		return true
+	}
+	switch apperror.Code(err) {
+	case CodeSiteAuthCredentialExpired, CodeSiteAuthReauthRequired:
+		return true
+	default:
 		return false
 	}
-	return strings.Contains(text, "http 401") ||
-		strings.Contains(text, "http 403") ||
-		strings.Contains(text, "unauthorized") ||
-		strings.Contains(text, "forbidden") ||
-		strings.Contains(text, "expired") ||
-		strings.Contains(text, "invalid token") ||
-		strings.Contains(text, "access token")
 }
 
 func refreshSub2APIManagedSession(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, currentAccessToken string) (string, error) {
@@ -80,9 +80,41 @@ func refreshSub2APIManagedSession(ctx context.Context, siteRecord *model.Site, a
 	}
 	refreshToken := strings.TrimSpace(account.RefreshToken)
 	if refreshToken == "" {
-		return "", fmt.Errorf("sub2api managed refresh token missing")
+		return "", newSiteReauthRequiredError("sub2api refresh token is missing")
 	}
 
+	key := sub2APIRefreshKey(account.ID, refreshToken)
+	resultCh := sub2APIRefreshGroup.DoChan(key, func() (any, error) {
+		return refreshSub2APIManagedSessionOnce(ctx, siteRecord, account, currentAccessToken, refreshToken)
+	})
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case result := <-resultCh:
+		if result.Err != nil {
+			return "", result.Err
+		}
+		refreshed, ok := result.Val.(sub2APIRefreshedCredentials)
+		if !ok {
+			return "", apperror.New(CodeSiteAuthRefreshTerminal, "sub2api token refresh returned an invalid internal result")
+		}
+		account.AccessToken = refreshed.AccessToken
+		account.RefreshToken = refreshed.RefreshToken
+		account.TokenExpiresAt = refreshed.TokenExpiresAt
+		return refreshed.AccessToken, nil
+	}
+}
+
+func sub2APIRefreshKey(accountID int, refreshToken string) string {
+	if accountID > 0 {
+		return "account:" + strconv.Itoa(accountID)
+	}
+	sum := sha256.Sum256([]byte(strings.TrimSpace(refreshToken)))
+	return fmt.Sprintf("refresh:%x", sum[:16])
+}
+
+func refreshSub2APIManagedSessionOnce(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, currentAccessToken string, expectedRefreshToken string) (sub2APIRefreshedCredentials, error) {
 	headers := map[string]string{
 		"Content-Type": "application/json",
 	}
@@ -95,37 +127,89 @@ func refreshSub2APIManagedSession(ctx context.Context, siteRecord *model.Site, a
 		siteRecord,
 		"POST",
 		buildSiteURL(siteRecord.BaseURL, "/api/v1/auth/refresh"),
-		map[string]any{"refresh_token": refreshToken},
+		map[string]any{"refresh_token": expectedRefreshToken},
 		headers,
 		account,
 	)
 	if err != nil {
-		return "", fmt.Errorf("sub2api token refresh request failed: %w", err)
+		return sub2APIRefreshedCredentials{}, wrapSub2APIRefreshError(err)
 	}
 
 	refreshed, ok := parseSub2APIRefreshPayload(payload)
 	if !ok {
-		return "", fmt.Errorf("sub2api token refresh failed")
+		message := firstNonEmptyString(extractSiteResponseMessage(payload), "sub2api token refresh response did not contain complete credentials")
+		return sub2APIRefreshedCredentials{}, apperror.New(CodeSiteAuthRefreshTerminal, sanitizeSiteStatusText(message)).
+			WithParam("retryable", false).
+			WithParam("stage", "refresh")
 	}
 
-	account.AccessToken = refreshed.AccessToken
-	account.RefreshToken = refreshed.RefreshToken
-	account.TokenExpiresAt = refreshed.TokenExpiresAt
+	return persistSub2APIRefreshedCredentials(ctx, account.ID, expectedRefreshToken, refreshed)
+}
 
-	if account.ID > 0 {
-		if err := db.GetDB().WithContext(ctx).
-			Model(&model.SiteAccount{}).
-			Where("id = ?", account.ID).
-			Updates(map[string]any{
-				"access_token":     refreshed.AccessToken,
-				"refresh_token":    refreshed.RefreshToken,
-				"token_expires_at": refreshed.TokenExpiresAt,
-			}).Error; err != nil {
-			return "", fmt.Errorf("failed to persist sub2api refreshed session: %w", err)
+func persistSub2APIRefreshedCredentials(ctx context.Context, accountID int, expectedRefreshToken string, refreshed sub2APIRefreshedCredentials) (sub2APIRefreshedCredentials, error) {
+	if accountID <= 0 {
+		return refreshed, nil
+	}
+	database := db.GetDB()
+	if database == nil {
+		return sub2APIRefreshedCredentials{}, fmt.Errorf("database is not initialized")
+	}
+
+	result := database.WithContext(ctx).
+		Model(&model.SiteAccount{}).
+		Where("id = ? AND refresh_token = ?", accountID, expectedRefreshToken).
+		Updates(map[string]any{
+			"access_token":     refreshed.AccessToken,
+			"refresh_token":    refreshed.RefreshToken,
+			"token_expires_at": refreshed.TokenExpiresAt,
+		})
+	if result.Error != nil {
+		return sub2APIRefreshedCredentials{}, fmt.Errorf("failed to persist sub2api refreshed session: %w", result.Error)
+	}
+	if result.RowsAffected > 0 {
+		return refreshed, nil
+	}
+
+	var current model.SiteAccount
+	if err := database.WithContext(ctx).
+		Select("access_token", "refresh_token", "token_expires_at").
+		First(&current, accountID).Error; err != nil {
+		return sub2APIRefreshedCredentials{}, fmt.Errorf("failed to reload concurrently refreshed sub2api session: %w", err)
+	}
+	currentCredentials := sub2APIRefreshedCredentials{
+		AccessToken:    stripBearerPrefix(current.AccessToken),
+		RefreshToken:   strings.TrimSpace(current.RefreshToken),
+		TokenExpiresAt: current.TokenExpiresAt,
+	}
+	if currentCredentials.AccessToken == "" || currentCredentials.RefreshToken == "" {
+		return sub2APIRefreshedCredentials{}, newSiteReauthRequiredError("sub2api credentials changed during refresh and are no longer usable")
+	}
+	return currentCredentials, nil
+}
+
+func wrapSub2APIRefreshError(err error) *apperror.Error {
+	retryable := false
+	switch apperror.Code(err) {
+	case CodeSiteUpstreamNetworkError, CodeSiteUpstreamRateLimited, CodeSiteUpstreamServerError:
+		retryable = true
+	}
+	if params := apperror.Params(err); params != nil {
+		if value, ok := params["retryable"].(bool); ok && value {
+			retryable = true
 		}
 	}
-
-	return refreshed.AccessToken, nil
+	code := CodeSiteAuthRefreshTerminal
+	if retryable {
+		code = CodeSiteAuthRefreshRetryable
+	}
+	wrapped := apperror.Wrap(code, "sub2api token refresh failed", err).
+		WithStatus(apperror.Status(err)).
+		WithParam("retryable", retryable).
+		WithParam("stage", "refresh")
+	if statusCode := siteErrorStatusCode(err); statusCode > 0 {
+		wrapped.WithParam("statusCode", statusCode)
+	}
+	return wrapped
 }
 
 func parseSub2APIRefreshPayload(payload map[string]any) (sub2APIRefreshedCredentials, bool) {

@@ -70,6 +70,7 @@ import { CheckinPanel } from "./CheckinPanel";
 import { SiteEditDialog } from "./SiteEditDialog";
 import { BatchEditDialog } from "./BatchEditDialog";
 import { AccountEditDialog } from "./AccountEditDialog";
+import { AuthRecoveryDialog } from "./AuthRecoveryDialog";
 import {
   accountHasCheckinEnabled,
   accountMatchesCheckinFilters,
@@ -92,6 +93,7 @@ import {
   CircleAlert,
   FileJson,
   FilterX,
+  KeyRound,
   Link2,
   MoreHorizontal,
   Pencil,
@@ -124,6 +126,19 @@ const CREDENTIAL_LABELS: Record<SiteCredentialType, string> = {
   [SiteCredentialType.UsernamePassword]: "用户名 / 密码",
   [SiteCredentialType.AccessToken]: "Access Token",
   [SiteCredentialType.APIKey]: "API Key",
+};
+
+const AUTH_STATUS_META: Record<
+  SiteAccount["auth_status"],
+  { label: string; className: string }
+> = {
+  unknown: { label: "待验证", className: "text-muted-foreground" },
+  valid: { label: "登录有效", className: "text-emerald-600" },
+  refreshing: { label: "正在续期", className: "text-blue-600" },
+  suspected_expired: { label: "疑似失效", className: "text-amber-600" },
+  reauth_required: { label: "需要登录", className: "text-destructive" },
+  recovering: { label: "正在恢复", className: "text-blue-600" },
+  verification_failed: { label: "验证失败", className: "text-destructive" },
 };
 
 type HealthTone = "default" | "danger" | "muted" | "warning";
@@ -608,6 +623,9 @@ export function Site() {
   const [editingAccount, setEditingAccount] = useState<SiteAccount | null>(
     null,
   );
+  const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false);
+  const [recoverySite, setRecoverySite] = useState<SiteRecord | null>(null);
+  const [recoveryAccount, setRecoveryAccount] = useState<SiteAccount | null>(null);
 
   // Batch selection
   const [selectedSiteIds, setSelectedSiteIds] = useState<number[]>([]);
@@ -961,6 +979,28 @@ export function Site() {
     setAccountSite(site);
     setEditingAccount(account);
     setAccountDialogOpen(true);
+  }
+
+  function openRecoveryDialog(site: SiteRecord, account: SiteAccount) {
+    setRecoverySite(site);
+    setRecoveryAccount(account);
+    setRecoveryDialogOpen(true);
+  }
+
+  function closeRecoveryDialog(open: boolean) {
+    setRecoveryDialogOpen(open);
+    if (!open) {
+      setRecoverySite(null);
+      setRecoveryAccount(null);
+    }
+  }
+
+  function openRecoveryManualFallback() {
+    if (!recoverySite || !recoveryAccount) return;
+    const site = recoverySite;
+    const account = recoveryAccount;
+    closeRecoveryDialog(false);
+    openEditAccountDialog(site, account);
   }
 
   function closeAccountDialog(open: boolean) {
@@ -1694,6 +1734,12 @@ export function Site() {
                                       >
                                         {account.enabled ? "启用中" : "已停用"}
                                       </Badge>
+                                      <Badge
+                                        variant="outline"
+                                        className={AUTH_STATUS_META[account.auth_status]?.className}
+                                      >
+                                        {AUTH_STATUS_META[account.auth_status]?.label ?? "待验证"}
+                                      </Badge>
                                     </div>
 
                                     <div className="flex flex-wrap gap-x-4 gap-y-1">
@@ -1817,6 +1863,16 @@ export function Site() {
                                             type="button"
                                             className={MENU_BUTTON_CLASS}
                                             onClick={() =>
+                                              openRecoveryDialog(site, account)
+                                            }
+                                          >
+                                            <KeyRound className="size-4" />
+                                            <span>使用扩展修复登录</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className={MENU_BUTTON_CLASS}
+                                            onClick={() =>
                                               openEditAccountDialog(site, account)
                                             }
                                           >
@@ -1843,6 +1899,19 @@ export function Site() {
                                 </div>
 
                                 <div className="space-y-1">
+                                    {account.auth_status === "reauth_required" ||
+                                    account.auth_status === "verification_failed" ? (
+                                      <button
+                                        type="button"
+                                        className="flex w-full items-center justify-between gap-3 rounded-xl border border-destructive/25 bg-destructive/5 px-3 py-2 text-left text-xs text-destructive"
+                                        onClick={() => openRecoveryDialog(site, account)}
+                                      >
+                                        <span className="truncate">
+                                          {account.auth_failure_message || "登录凭据需要重新获取"}
+                                        </span>
+                                        <span className="shrink-0 font-medium">修复登录</span>
+                                      </button>
+                                    ) : null}
                                     <ExecutionSummary
                                       label="同步"
                                       status={normalizedStatus(
@@ -2140,6 +2209,14 @@ export function Site() {
         onOpenChange={closeAccountDialog}
         site={accountSite}
         account={editingAccount}
+      />
+
+      <AuthRecoveryDialog
+        open={recoveryDialogOpen}
+        onOpenChange={closeRecoveryDialog}
+        site={recoverySite}
+        account={recoveryAccount}
+        onManualFallback={openRecoveryManualFallback}
       />
 
       <Dialog

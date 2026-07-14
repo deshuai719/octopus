@@ -85,7 +85,7 @@ func requestJSON(ctx context.Context, siteRecord *model.Site, method string, req
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, wrapSiteNetworkError(err)
 	}
 	defer resp.Body.Close()
 

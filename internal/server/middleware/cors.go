@@ -9,6 +9,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const RecoveryExtensionOrigin = "chrome-extension://hcnomejlhhefpnhljgcclhggoljokimn"
+
+const recoveryCandidatePathPrefix = "/api/v1/site/auth-recovery/"
+
 func Cors() gin.HandlerFunc {
 	config := cors.DefaultConfig()
 	config.AllowCredentials = true
@@ -57,5 +61,16 @@ func Cors() gin.HandlerFunc {
 		}
 		return false
 	}
+	config.AllowOriginWithContextFunc = func(c *gin.Context, origin string) bool {
+		return allowRecoveryExtensionOrigin(c.Request.URL.Path, origin)
+	}
 	return cors.New(config)
+}
+
+func allowRecoveryExtensionOrigin(path string, origin string) bool {
+	if origin != RecoveryExtensionOrigin || !strings.HasPrefix(path, recoveryCandidatePathPrefix) || !strings.HasSuffix(path, "/candidate") {
+		return false
+	}
+	sessionID := strings.TrimSuffix(strings.TrimPrefix(path, recoveryCandidatePathPrefix), "/candidate")
+	return sessionID != "" && !strings.Contains(sessionID, "/")
 }

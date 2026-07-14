@@ -80,6 +80,34 @@ func DetectPlatform(ctx context.Context, rawURL string) (model.SitePlatform, mod
 	return sitesync.DetectPlatform(ctx, rawURL)
 }
 
+func DetectPlatformDetailed(ctx context.Context, rawURL string) (sitesync.PlatformDetection, error) {
+	return sitesync.DetectPlatformDetailed(ctx, rawURL)
+}
+
+func PlatformAuthCapabilities() []sitesync.PlatformAuthCapability {
+	return sitesync.PlatformAuthCapabilities()
+}
+
+func CreateRecoverySession(ctx context.Context, accountID int, ownerToken string) (sitesync.RecoverySessionView, error) {
+	return sitesync.CreateRecoverySession(ctx, accountID, ownerToken)
+}
+
+func GetRecoverySession(ctx context.Context, sessionID string, ownerToken string) (sitesync.RecoverySessionView, error) {
+	return sitesync.GetRecoverySession(ctx, sessionID, ownerToken)
+}
+
+func SubmitRecoveryCandidate(ctx context.Context, sessionID string, capability string, input sitesync.RecoveryCandidateInput) (sitesync.RecoverySessionView, error) {
+	return sitesync.SubmitRecoveryCandidate(ctx, sessionID, capability, input)
+}
+
+func ConfirmRecoverySession(ctx context.Context, sessionID string, ownerToken string) (sitesync.RecoverySessionView, error) {
+	return sitesync.ConfirmRecoverySession(ctx, sessionID, ownerToken)
+}
+
+func CancelRecoverySession(ctx context.Context, sessionID string, ownerToken string) (sitesync.RecoverySessionView, error) {
+	return sitesync.CancelRecoverySession(ctx, sessionID, ownerToken)
+}
+
 func CreateAccountToken(ctx context.Context, accountID int, req model.SiteChannelKeyCreateRequest) (*model.SiteSyncResult, error) {
 	return sitesync.CreateAccountToken(ctx, accountID, req)
 }

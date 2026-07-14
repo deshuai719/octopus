@@ -1026,12 +1026,35 @@
                 "access_token_required": "The site access token is required.",
                 "direct_token_required": "The site direct token is required.",
                 "login_failed": "Site login failed. Check the account, password, or site status.",
-                "login_token_missing": "Site login succeeded but no access token was returned. Check site compatibility."
+                "login_token_missing": "Site login succeeded but no access token was returned. Check site compatibility.",
+                "credential_expired": "The site credential has expired. Sign in again.",
+                "credential_revoked": "The site credential was revoked. Sign in again.",
+                "refresh_failed_retryable": "The site credential could not be refreshed temporarily. Try again later.",
+                "refresh_failed_terminal": "The site credential cannot be refreshed. Sign in again.",
+                "reauth_required": "The site account requires you to sign in again.",
+                "identity_mismatch": "The signed-in identity differs from the saved account. Confirm it before saving."
+            },
+            "platform": {
+                "detect_inconclusive": "The site platform could not be identified reliably. Select it manually.",
+                "incompatible": "The site does not provide the required authentication recovery capability."
+            },
+            "recovery": {
+                "not_found": "The recovery session does not exist or has expired.",
+                "expired": "The recovery session has expired. Create a new one.",
+                "invalid": "The recovery candidate is invalid. Create a new session.",
+                "forbidden": "Recovery session verification failed. Create a new session.",
+                "replay": "This recovery capability has already been used and cannot be submitted again.",
+                "conflict": "The account or recovery session changed. Start again.",
+                "rate_limited": "Too many recovery requests were sent. Try again later."
             },
             "upstream": {
                 "http_error": "The upstream site request failed (HTTP {statusCode}). Check the site status or try again later.",
                 "decode_failed": "Failed to parse the site response. Check site compatibility or try again later.",
-                "cloudflare_challenge": "The site triggered Cloudflare protection. Try again later or manually complete verification on the site."
+                "cloudflare_challenge": "The site triggered Cloudflare protection. Try again later or manually complete verification on the site.",
+                "permission_denied": "The site denied this operation. Check the account permissions.",
+                "rate_limited": "The site rate-limited the request. Try again later.",
+                "network_error": "The site could not be reached. Check the network and try again.",
+                "server_error": "The site service is temporarily unavailable. Try again later."
             },
             "import": {
                 "invalid_json": "The import content is not valid JSON. Check the file format or pasted content.",

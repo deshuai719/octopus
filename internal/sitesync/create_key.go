@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/utils/log"
 )
 
 func CreateAccountToken(ctx context.Context, accountID int, req model.SiteChannelKeyCreateRequest) (*model.SiteSyncResult, error) {
@@ -23,21 +24,22 @@ func CreateAccountToken(ctx context.Context, accountID int, req model.SiteChanne
 	groupKey := model.NormalizeSiteGroupKey(req.GroupKey)
 	name := strings.TrimSpace(req.Name)
 
+	var createErr error
 	switch siteRecord.Platform {
 	case model.SitePlatformAnyRouter:
-		if err := createAnyRouterToken(ctx, siteRecord, account, groupKey, name); err != nil {
-			return nil, err
-		}
+		createErr = createAnyRouterToken(ctx, siteRecord, account, groupKey, name)
 	case model.SitePlatformNewAPI, model.SitePlatformOneAPI, model.SitePlatformOneHub, model.SitePlatformDoneHub:
-		if err := createManagementPlatformToken(ctx, siteRecord, account, groupKey, name); err != nil {
-			return nil, err
-		}
+		createErr = createManagementPlatformToken(ctx, siteRecord, account, groupKey, name)
 	case model.SitePlatformSub2API:
-		if err := createSub2APIToken(ctx, siteRecord, account, groupKey, name); err != nil {
-			return nil, err
-		}
+		createErr = createSub2APIToken(ctx, siteRecord, account, groupKey, name)
 	default:
 		return nil, fmt.Errorf("site platform %s does not support quick key creation", siteRecord.Platform)
+	}
+	if createErr != nil {
+		if authErr := recordAccountAuthFailure(ctx, account, "create_key", createErr); authErr != nil {
+			log.Warnf("failed to update site account auth state after key creation failure (account=%d): %v", account.ID, authErr)
+		}
+		return nil, sanitizeSiteError(createErr)
 	}
 
 	return SyncAccount(ctx, accountID)

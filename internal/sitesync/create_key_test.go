@@ -210,6 +210,63 @@ func TestCreateAccountTokenCreatesSub2APIKeyAndSyncsAccount(t *testing.T) {
 	}
 }
 
+func TestCreateAccountTokenReportsAuthenticationFailures(t *testing.T) {
+	ctx := setupProjectTestDB(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"success":false,"message":"token expired"}`))
+	}))
+	defer server.Close()
+
+	site := &model.Site{
+		Name:     "managed-expired-site",
+		Platform: model.SitePlatformNewAPI,
+		BaseURL:  server.URL,
+		Enabled:  true,
+	}
+	if err := op.SiteCreate(site, ctx); err != nil {
+		t.Fatalf("SiteCreate failed: %v", err)
+	}
+	userID := 42
+	account := &model.SiteAccount{
+		SiteID:         site.ID,
+		Name:           "managed-expired-account",
+		CredentialType: model.SiteCredentialTypeAccessToken,
+		AccessToken:    "expired-token",
+		PlatformUserID: &userID,
+		Enabled:        true,
+	}
+	if err := op.SiteAccountCreate(account, ctx); err != nil {
+		t.Fatalf("SiteAccountCreate failed: %v", err)
+	}
+
+	if _, err := CreateAccountToken(ctx, account.ID, model.SiteChannelKeyCreateRequest{GroupKey: "vip"}); err == nil {
+		t.Fatal("first key creation should fail")
+	}
+	first, err := op.SiteAccountGet(account.ID, ctx)
+	if err != nil {
+		t.Fatalf("reload first auth transition failed: %v", err)
+	}
+	if first.AuthStatus != model.SiteAuthStatusSuspectedExpired || first.ConsecutiveAuthFailures != 1 {
+		t.Fatalf("first auth transition = status %q failures %d", first.AuthStatus, first.ConsecutiveAuthFailures)
+	}
+
+	if _, err := CreateAccountToken(ctx, account.ID, model.SiteChannelKeyCreateRequest{GroupKey: "vip"}); err == nil {
+		t.Fatal("second key creation should fail")
+	}
+	second, err := op.SiteAccountGet(account.ID, ctx)
+	if err != nil {
+		t.Fatalf("reload second auth transition failed: %v", err)
+	}
+	if second.AuthStatus != model.SiteAuthStatusReauthRequired || second.ConsecutiveAuthFailures != 2 {
+		t.Fatalf("second auth transition = status %q failures %d", second.AuthStatus, second.ConsecutiveAuthFailures)
+	}
+	if second.AuthFailureStage != "create_key" || second.AuthFailureCode != CodeSiteAuthCredentialExpired {
+		t.Fatalf("second auth failure = stage %q code %q", second.AuthFailureStage, second.AuthFailureCode)
+	}
+}
+
 func TestSiteTokenCreateSucceededFromAnyRequiresExplicitPrimitiveTrue(t *testing.T) {
 	for name, value := range map[string]any{
 		"false":        false,

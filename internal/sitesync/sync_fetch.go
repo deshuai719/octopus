@@ -3,6 +3,7 @@ package sitesync
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -147,7 +148,17 @@ func unwrapSub2APIData(payload map[string]any, endpoint string) (any, error) {
 		code := anyToInt64(rawCode)
 		if code != 0 {
 			message := firstNonEmptyString(extractSiteResponseMessage(payload), fmt.Sprintf("sub2api %s returned code %d", endpoint, code))
-			return nil, apperror.Newf(apperror.CodeSiteSub2APIEnvelopeFailed, "sub2api %s failed: %s", endpoint, message)
+			err := apperror.Newf(apperror.CodeSiteSub2APIEnvelopeFailed, "sub2api %s failed: %s", endpoint, sanitizeSiteStatusText(message)).
+				WithParam("upstreamCode", code)
+			switch code {
+			case http.StatusUnauthorized:
+				err.WithStatus(http.StatusUnauthorized)
+			case http.StatusForbidden:
+				err.WithStatus(http.StatusForbidden)
+			case http.StatusTooManyRequests:
+				err.WithStatus(http.StatusTooManyRequests)
+			}
+			return nil, err
 		}
 		if data, ok := payload["data"]; ok {
 			return data, nil

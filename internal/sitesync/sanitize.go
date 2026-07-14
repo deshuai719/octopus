@@ -123,7 +123,11 @@ func siteBatchReason(err error) SiteBatchReason {
 func siteErrorStatusCode(err error) int {
 	params := apperror.Params(err)
 	if params != nil {
-		switch value := params["statusCode"].(type) {
+		value := params["statusCode"]
+		if value == nil {
+			value = params["upstreamCode"]
+		}
+		switch value := value.(type) {
 		case int:
 			return value
 		case int64:

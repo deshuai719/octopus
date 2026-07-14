@@ -39,6 +39,9 @@ func SyncAccount(ctx context.Context, accountID int) (*model.SiteSyncResult, err
 	snapshot, syncErr := syncAccountState(ctx, siteRecord, account)
 	if snapshot == nil && syncErr != nil {
 		message := sanitizeSiteStatusMessage(syncErr)
+		if authErr := recordAccountAuthFailure(ctx, account, "sync", syncErr); authErr != nil {
+			log.Warnf("failed to update site account auth state (account=%d): %v", account.ID, authErr)
+		}
 		updateErr := updateAccountSyncState(ctx, account.ID, model.SiteExecutionStatusFailed, message, "")
 		if updateErr != nil {
 			log.Warnf("failed to update site account sync state (account=%d): %v", account.ID, updateErr)
@@ -49,13 +52,26 @@ func SyncAccount(ctx context.Context, accountID int) (*model.SiteSyncResult, err
 		return nil, sanitizeSiteError(syncErr)
 	}
 
-	if err := persistSyncSnapshot(ctx, account.ID, snapshot); err != nil {
-		return nil, sanitizeSiteError(err)
+	if syncErr == nil {
+		now := time.Now()
+		if err := persistSyncSnapshotWithAccountUpdates(ctx, account.ID, snapshot, now, accountAuthSuccessUpdates(now)); err != nil {
+			return nil, sanitizeSiteError(err)
+		}
+		applyAccountAuthSuccess(account, now)
+	} else {
+		if err := persistSyncSnapshot(ctx, account.ID, snapshot); err != nil {
+			return nil, sanitizeSiteError(err)
+		}
 	}
 
 	channelIDs, err := ProjectAccount(ctx, account.ID)
 	if err != nil {
 		return nil, sanitizeSiteError(err)
+	}
+	if syncErr != nil {
+		if authErr := recordAccountAuthFailure(ctx, account, "sync", syncErr); authErr != nil {
+			log.Warnf("failed to update site account auth state (account=%d): %v", account.ID, authErr)
+		}
 	}
 
 	modelNames := make([]string, 0, len(snapshot.models))
@@ -91,6 +107,9 @@ func CheckinAccount(ctx context.Context, accountID int) (*model.SiteCheckinResul
 
 	result, resolvedAccessToken, err := checkinAccountState(ctx, siteRecord, account)
 	if err != nil {
+		if authErr := recordAccountAuthFailure(ctx, account, "checkin", err); authErr != nil {
+			log.Warnf("failed to update site account auth state (account=%d): %v", account.ID, authErr)
+		}
 		status := model.SiteExecutionStatusFailed
 		lowered := strings.ToLower(err.Error())
 		if strings.Contains(lowered, "not supported") || strings.Contains(lowered, "not found") {

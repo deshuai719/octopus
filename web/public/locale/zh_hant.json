@@ -1026,12 +1026,35 @@
                 "access_token_required": "站點 Access Token 不能為空。",
                 "direct_token_required": "站點 Direct Token 不能為空。",
                 "login_failed": "站點登入失敗，請檢查帳號、密碼或站點狀態。",
-                "login_token_missing": "站點登入成功但未返回 Access Token，請檢查站點相容性。"
+                "login_token_missing": "站點登入成功但未返回 Access Token，請檢查站點相容性。",
+                "credential_expired": "站點憑據已過期，請重新登入。",
+                "credential_revoked": "站點憑據已被撤銷，請重新登入。",
+                "refresh_failed_retryable": "站點憑據重新整理暫時失敗，請稍後重試。",
+                "refresh_failed_terminal": "站點憑據無法重新整理，請重新登入。",
+                "reauth_required": "站點帳號需要重新登入。",
+                "identity_mismatch": "目前登入身分與原帳號不一致，請確認後再儲存。"
+            },
+            "platform": {
+                "detect_inconclusive": "無法可靠識別站點平台，請手動選擇。",
+                "incompatible": "該站點不支援所需的認證恢復能力。"
+            },
+            "recovery": {
+                "not_found": "恢復工作階段不存在或已經過期。",
+                "expired": "恢復工作階段已經過期，請重新建立。",
+                "invalid": "恢復候選資料無效，請重新建立工作階段。",
+                "forbidden": "恢復工作階段校驗失敗，請重新建立。",
+                "replay": "該恢復 capability 已經使用，不能重複提交。",
+                "conflict": "帳號或恢復工作階段已發生變化，請重新開始。",
+                "rate_limited": "恢復請求過於頻繁，請稍後重試。"
             },
             "upstream": {
                 "http_error": "站點上游請求失敗（HTTP {statusCode}），請檢查站點狀態或稍後重試。",
                 "decode_failed": "站點回應解析失敗，請檢查站點相容性或稍後重試。",
-                "cloudflare_challenge": "站點觸發 Cloudflare 保護，請稍後重試，或手動訪問站點完成驗證。"
+                "cloudflare_challenge": "站點觸發 Cloudflare 保護，請稍後重試，或手動訪問站點完成驗證。",
+                "permission_denied": "站點拒絕了目前操作，請檢查帳號權限。",
+                "rate_limited": "站點觸發限速，請稍後重試。",
+                "network_error": "無法連線站點，請檢查網路後重試。",
+                "server_error": "站點服務暫時異常，請稍後重試。"
             },
             "import": {
                 "invalid_json": "匯入內容不是有效的 JSON，請檢查檔案格式或貼上的內容。",

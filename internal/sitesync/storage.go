@@ -59,106 +59,125 @@ func isMissingManagedChannelError(err error) bool {
 }
 
 func persistSyncSnapshot(ctx context.Context, accountID int, snapshot *syncSnapshot) error {
+	return persistSyncSnapshotWithAccountUpdates(ctx, accountID, snapshot, time.Now(), nil)
+}
+
+func persistSyncSnapshotWithAccountUpdates(ctx context.Context, accountID int, snapshot *syncSnapshot, now time.Time, accountUpdates map[string]any) error {
 	if snapshot == nil {
 		return newSnapshotNilError()
 	}
-	now := time.Now()
-	err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var existingGroups []model.SiteUserGroup
-		if err := tx.Where("site_account_id = ?", accountID).Find(&existingGroups).Error; err != nil {
-			return err
-		}
-		existingGroupMap := make(map[string]model.SiteUserGroup, len(existingGroups))
-		for _, group := range existingGroups {
-			existingGroupMap[model.NormalizeSiteGroupKey(group.GroupKey)] = group
-		}
-
-		if err := tx.Where("site_account_id = ?", accountID).Delete(&model.SiteUserGroup{}).Error; err != nil {
-			return err
-		}
-
-		var existingTokens []model.SiteToken
-		if err := tx.Where("site_account_id = ?", accountID).Order("id ASC").Find(&existingTokens).Error; err != nil {
-			return err
-		}
-
-		var existingModels []model.SiteModel
-		if err := tx.Where("site_account_id = ?", accountID).Find(&existingModels).Error; err != nil {
-			return err
-		}
-		existingModelMap := make(map[string]model.SiteModel, len(existingModels))
-		for _, item := range existingModels {
-			key := model.NormalizeSiteGroupKey(item.GroupKey) + "\x00" + strings.TrimSpace(item.ModelName)
-			existingModelMap[key] = item
-		}
-
-		updatePayload := map[string]any{
-			"last_sync_at":      &now,
-			"last_sync_status":  snapshot.status,
-			"last_sync_message": sanitizeSiteStatusText(snapshot.message),
-			"balance":           snapshot.balance,
-			"balance_used":      snapshot.balanceUsed,
-			"today_income":      snapshot.todayIncome,
-		}
-		if strings.TrimSpace(snapshot.accessToken) != "" {
-			updatePayload["access_token"] = strings.TrimSpace(snapshot.accessToken)
-		}
-		if err := tx.Model(&model.SiteAccount{}).Where("id = ?", accountID).Updates(updatePayload).Error; err != nil {
-			return err
-		}
-
-		groupResultMap := make(map[string]siteGroupSyncResult, len(snapshot.groupResults))
-		for _, result := range snapshot.groupResults {
-			groupResultMap[model.NormalizeSiteGroupKey(result.GroupKey)] = result
-		}
-		for i := range snapshot.groups {
-			snapshot.groups[i].SiteAccountID = accountID
-			snapshot.groups[i].GroupKey = model.NormalizeSiteGroupKey(snapshot.groups[i].GroupKey)
-			var existing *model.SiteUserGroup
-			if item, ok := existingGroupMap[snapshot.groups[i].GroupKey]; ok {
-				itemCopy := item
-				existing = &itemCopy
-				snapshot.groups[i].ProjectionDisabled = item.ProjectionDisabled
-			}
-			if result, ok := groupResultMap[snapshot.groups[i].GroupKey]; ok {
-				applyPersistedGroupSyncState(&snapshot.groups[i], existing, result, now)
-			} else if existing != nil {
-				copyPersistedGroupSyncState(&snapshot.groups[i], *existing)
-			}
-		}
-		mergedTokens := mergePersistedSiteTokens(accountID, existingTokens, snapshot.tokens, now)
-		incomingModels := preparePersistedSyncModels(accountID, snapshot.models, existingModelMap, now)
-		finalModels := mergePersistedSiteModelsByGroup(existingModels, incomingModels, snapshot.groupResults)
-
-		if len(snapshot.groups) > 0 {
-			if err := tx.Create(&snapshot.groups).Error; err != nil {
-				return err
-			}
-		}
-		if err := tx.Where("site_account_id = ?", accountID).Delete(&model.SiteToken{}).Error; err != nil {
-			return err
-		}
-		if len(mergedTokens) > 0 {
-			if err := tx.Create(&mergedTokens).Error; err != nil {
-				return err
-			}
-		}
-		if len(finalModels) > 0 {
-			if err := tx.Where("site_account_id = ?", accountID).Delete(&model.SiteModel{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Create(&finalModels).Error; err != nil {
-				return err
-			}
-		} else {
-			if err := tx.Where("site_account_id = ?", accountID).Delete(&model.SiteModel{}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+	return db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return persistSyncSnapshotWithAccountUpdatesTx(tx, accountID, snapshot, now, accountUpdates)
 	})
-	if err != nil {
+}
+
+func persistSyncSnapshotWithAccountUpdatesTx(tx *gorm.DB, accountID int, snapshot *syncSnapshot, now time.Time, accountUpdates map[string]any) error {
+	if err := persistSyncSnapshotTx(tx, accountID, snapshot, now); err != nil {
 		return err
+	}
+	if len(accountUpdates) == 0 {
+		return nil
+	}
+	return tx.Model(&model.SiteAccount{}).Where("id = ?", accountID).Updates(accountUpdates).Error
+}
+
+func persistSyncSnapshotTx(tx *gorm.DB, accountID int, snapshot *syncSnapshot, now time.Time) error {
+	if tx == nil {
+		return fmt.Errorf("database transaction is nil")
+	}
+	if snapshot == nil {
+		return newSnapshotNilError()
+	}
+	var existingGroups []model.SiteUserGroup
+	if err := tx.Where("site_account_id = ?", accountID).Find(&existingGroups).Error; err != nil {
+		return err
+	}
+	existingGroupMap := make(map[string]model.SiteUserGroup, len(existingGroups))
+	for _, group := range existingGroups {
+		existingGroupMap[model.NormalizeSiteGroupKey(group.GroupKey)] = group
+	}
+
+	if err := tx.Where("site_account_id = ?", accountID).Delete(&model.SiteUserGroup{}).Error; err != nil {
+		return err
+	}
+
+	var existingTokens []model.SiteToken
+	if err := tx.Where("site_account_id = ?", accountID).Order("id ASC").Find(&existingTokens).Error; err != nil {
+		return err
+	}
+
+	var existingModels []model.SiteModel
+	if err := tx.Where("site_account_id = ?", accountID).Find(&existingModels).Error; err != nil {
+		return err
+	}
+	existingModelMap := make(map[string]model.SiteModel, len(existingModels))
+	for _, item := range existingModels {
+		key := model.NormalizeSiteGroupKey(item.GroupKey) + "\x00" + strings.TrimSpace(item.ModelName)
+		existingModelMap[key] = item
+	}
+
+	updatePayload := map[string]any{
+		"last_sync_at":      &now,
+		"last_sync_status":  snapshot.status,
+		"last_sync_message": sanitizeSiteStatusText(snapshot.message),
+		"balance":           snapshot.balance,
+		"balance_used":      snapshot.balanceUsed,
+		"today_income":      snapshot.todayIncome,
+	}
+	if strings.TrimSpace(snapshot.accessToken) != "" {
+		updatePayload["access_token"] = strings.TrimSpace(snapshot.accessToken)
+	}
+	if err := tx.Model(&model.SiteAccount{}).Where("id = ?", accountID).Updates(updatePayload).Error; err != nil {
+		return err
+	}
+
+	groupResultMap := make(map[string]siteGroupSyncResult, len(snapshot.groupResults))
+	for _, result := range snapshot.groupResults {
+		groupResultMap[model.NormalizeSiteGroupKey(result.GroupKey)] = result
+	}
+	for i := range snapshot.groups {
+		snapshot.groups[i].SiteAccountID = accountID
+		snapshot.groups[i].GroupKey = model.NormalizeSiteGroupKey(snapshot.groups[i].GroupKey)
+		var existing *model.SiteUserGroup
+		if item, ok := existingGroupMap[snapshot.groups[i].GroupKey]; ok {
+			itemCopy := item
+			existing = &itemCopy
+			snapshot.groups[i].ProjectionDisabled = item.ProjectionDisabled
+		}
+		if result, ok := groupResultMap[snapshot.groups[i].GroupKey]; ok {
+			applyPersistedGroupSyncState(&snapshot.groups[i], existing, result, now)
+		} else if existing != nil {
+			copyPersistedGroupSyncState(&snapshot.groups[i], *existing)
+		}
+	}
+	mergedTokens := mergePersistedSiteTokens(accountID, existingTokens, snapshot.tokens, now)
+	incomingModels := preparePersistedSyncModels(accountID, snapshot.models, existingModelMap, now)
+	finalModels := mergePersistedSiteModelsByGroup(existingModels, incomingModels, snapshot.groupResults)
+
+	if len(snapshot.groups) > 0 {
+		if err := tx.Create(&snapshot.groups).Error; err != nil {
+			return err
+		}
+	}
+	if err := tx.Where("site_account_id = ?", accountID).Delete(&model.SiteToken{}).Error; err != nil {
+		return err
+	}
+	if len(mergedTokens) > 0 {
+		if err := tx.Create(&mergedTokens).Error; err != nil {
+			return err
+		}
+	}
+	if len(finalModels) > 0 {
+		if err := tx.Where("site_account_id = ?", accountID).Delete(&model.SiteModel{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&finalModels).Error; err != nil {
+			return err
+		}
+	} else {
+		if err := tx.Where("site_account_id = ?", accountID).Delete(&model.SiteModel{}).Error; err != nil {
+			return err
+		}
 	}
 	return nil
 }

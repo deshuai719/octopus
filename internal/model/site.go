@@ -19,8 +19,8 @@ const (
 	SitePlatformOneAPI    SitePlatform = "one-api"
 	SitePlatformOneHub    SitePlatform = "one-hub"
 	SitePlatformDoneHub   SitePlatform = "done-hub"
-	SitePlatformSub2API SitePlatform = "sub2api"
-	SitePlatformAPI     SitePlatform = "api"
+	SitePlatformSub2API   SitePlatform = "sub2api"
+	SitePlatformAPI       SitePlatform = "api"
 )
 
 type SiteCredentialType string
@@ -32,6 +32,18 @@ const (
 )
 
 type SiteExecutionStatus string
+
+type SiteAuthStatus string
+
+const (
+	SiteAuthStatusUnknown            SiteAuthStatus = "unknown"
+	SiteAuthStatusValid              SiteAuthStatus = "valid"
+	SiteAuthStatusRefreshing         SiteAuthStatus = "refreshing"
+	SiteAuthStatusSuspectedExpired   SiteAuthStatus = "suspected_expired"
+	SiteAuthStatusReauthRequired     SiteAuthStatus = "reauth_required"
+	SiteAuthStatusRecovering         SiteAuthStatus = "recovering"
+	SiteAuthStatusVerificationFailed SiteAuthStatus = "verification_failed"
+)
 
 type SiteGroupModelSyncStatus string
 
@@ -243,6 +255,14 @@ type SiteAccount struct {
 	LastCheckinStatus          SiteExecutionStatus  `json:"last_checkin_status" gorm:"type:varchar(16);default:'idle'"`
 	LastSyncMessage            string               `json:"last_sync_message"`
 	LastCheckinMessage         string               `json:"last_checkin_message"`
+	AuthStatus                 SiteAuthStatus       `json:"auth_status" gorm:"type:varchar(32);not null;default:'unknown';index"`
+	AuthFailureCode            string               `json:"auth_failure_code" gorm:"size:96"`
+	AuthFailureMessage         string               `json:"auth_failure_message"`
+	AuthFailureStage           string               `json:"auth_failure_stage" gorm:"size:32"`
+	ConsecutiveAuthFailures    int                  `json:"consecutive_auth_failures" gorm:"default:0"`
+	LastAuthSuccessAt          *time.Time           `json:"last_auth_success_at"`
+	LastAuthFailureAt          *time.Time           `json:"last_auth_failure_at"`
+	ReauthNotifiedAt           *time.Time           `json:"reauth_notified_at"`
 	Tokens                     []SiteToken          `json:"tokens,omitempty" gorm:"foreignKey:SiteAccountID"`
 	UserGroups                 []SiteUserGroup      `json:"user_groups,omitempty" gorm:"foreignKey:SiteAccountID"`
 	Models                     []SiteModel          `json:"models,omitempty" gorm:"foreignKey:SiteAccountID"`
@@ -991,6 +1011,9 @@ func (a *SiteAccount) Normalize() {
 	}
 	if a.CheckinRandomWindowMinutes < 0 {
 		a.CheckinRandomWindowMinutes = 0
+	}
+	if strings.TrimSpace(string(a.AuthStatus)) == "" {
+		a.AuthStatus = SiteAuthStatusUnknown
 	}
 }
 

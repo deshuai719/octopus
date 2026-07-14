@@ -18,7 +18,6 @@ export interface ApiError {
     code: number;
     message: string;
     errorCode?: string;
-    rawMessage?: string;
     params?: ApiErrorParams;
 }
 

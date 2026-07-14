@@ -223,6 +223,10 @@ export function SiteEditDialog({ open, onOpenChange, site, onCreated, allTags }:
                         siteForm.base_url.trim(),
                     );
                     platform = detected.platform as SitePlatform;
+					setSiteForm((current) => ({
+						...current,
+						platform: detected.platform as SitePlatform,
+					}));
                     if (detected.default_route_type) {
                         defaultRouteType = detected.default_route_type;
                         setSiteForm((current) => ({
@@ -230,9 +234,15 @@ export function SiteEditDialog({ open, onOpenChange, site, onCreated, allTags }:
                             default_route_type: detected.default_route_type!,
                         }));
                     }
-                    toast.success(
-                        `自动检测到平台：${PLATFORM_LABELS[platform] ?? platform}`,
-                    );
+					if (detected.requires_confirmation) {
+						toast.warning(
+							`检测到候选平台：${PLATFORM_LABELS[platform] ?? platform}，请确认后再次提交`,
+						);
+						return;
+					}
+					toast.success(
+						`自动检测到平台：${PLATFORM_LABELS[platform] ?? platform}`,
+					);
                 } catch {
                     toast.error('无法自动检测平台类型，请手动选择');
                     return;
