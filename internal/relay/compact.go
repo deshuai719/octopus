@@ -192,6 +192,7 @@ func HandleResponsesCompact(c *gin.Context) {
 		failureKind := circuitFailureKind(group.RetryEnabled, statusCode)
 		balancer.RecordFailure(channel.ID, usedKey.ID, requestModel, failureKind)
 		outlierwindow.Report(channel.ID, false, statusCode, time.Now())
+		iter.ClearStickyOnFailure()
 		lastErr = attemptErr
 		lastStatusCode = statusCode
 		lastRetryAfter = retryAfter

@@ -293,6 +293,7 @@ func Handler(inboundType inbound.InboundType, c *gin.Context) {
 			if failureKind == balancer.FailureHard {
 				maybeLearnManagedRoute(c.Request.Context(), channel.ID, internalRequest.Model, inboundType, result.Err)
 			}
+			iter.ClearStickyOnFailure()
 		}
 
 		if result.Success {

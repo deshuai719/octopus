@@ -57,6 +57,7 @@ function MemberItem({
     layoutScope?: string;
     dnd: MemberItemDnd;
 }) {
+    const t = useTranslations('group');
     const { Avatar: ModelAvatar } = getModelIcon(member.name);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const isDisabled = member.enabled === false;
@@ -126,6 +127,8 @@ function MemberItem({
 
                 {showWeight && (
                     <input
+                        aria-label={t('form.weightInputLabel')}
+                        title={t('form.weightInputLabel')}
                         type="number"
                         min={1}
                         value={member.weight ?? 1}

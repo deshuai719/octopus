@@ -87,8 +87,8 @@ func (b *Weighted) Candidates(items []model.GroupItem) []model.GroupItem {
 
 	// 构建加权随机排序
 	type weightedItem struct {
-		item   model.GroupItem
-		score  float64
+		item  model.GroupItem
+		score float64
 	}
 
 	totalWeight := 0
@@ -132,6 +132,44 @@ func sortByPriority(items []model.GroupItem) []model.GroupItem {
 		return sorted[i].Priority < sorted[j].Priority
 	})
 	return sorted
+}
+
+func applyPaidSiteLowRatioFirst(candidates []model.GroupItem, enabled bool) {
+	if !enabled || len(candidates) < 2 {
+		return
+	}
+
+	paidIndexes := make([]int, 0, len(candidates))
+	paidItems := make([]model.GroupItem, 0, len(candidates))
+	for i, item := range candidates {
+		if !item.PaidSite {
+			continue
+		}
+		paidIndexes = append(paidIndexes, i)
+		paidItems = append(paidItems, item)
+	}
+	if len(paidItems) < 2 {
+		return
+	}
+
+	sort.SliceStable(paidItems, func(i, j int) bool {
+		left := paidItems[i].SiteGroupRatio
+		right := paidItems[j].SiteGroupRatio
+		switch {
+		case left == nil && right == nil:
+			return false
+		case left == nil:
+			return false
+		case right == nil:
+			return true
+		default:
+			return *left < *right
+		}
+	})
+
+	for i, candidateIndex := range paidIndexes {
+		candidates[candidateIndex] = paidItems[i]
+	}
 }
 
 // Reset clears in-memory balancer state for tests.

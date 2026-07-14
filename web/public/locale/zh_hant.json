@@ -591,11 +591,26 @@
             "firstTokenTimeOut": "首字逾時",
             "firstTokenTimeOutHint": "單位秒，僅串流響應起效，0 表示不限制",
             "sessionKeepTime": "會話保持",
-            "sessionKeepTimeHint": "單位秒，會話期間保持使用同一供應源，0 表示停用",
+            "sessionKeepTimeHint": "單位秒，僅按時間保持模式生效，0 表示停用",
+            "sessionKeepTimeDescription": "按時間保持會在指定秒數內讓同一會話黏到已選供應源；過期或失敗後按目前分組策略重新選擇。",
+            "sessionKeepTimeUntilFailureDescription": "保持到失敗模式不使用秒數；目前 sticky 供應源失敗後才解除。",
+            "sessionKeepMode": "保持模式",
+            "sessionKeepModeHint": "保持模式不是負載均衡策略；沒有 sticky 或 sticky 解除後仍按目前分組模式選擇候選。",
+            "sessionKeepModeDescription": "保持到失敗會在供應源失敗前持續復用 sticky；若目前 sticky 是付費候選，且開啟低倍率優先，則允許切到更低倍率付費候選。",
+            "sessionKeepModeOptions": {
+                "ttl": "按時間保持",
+                "until_failure": "保持到失敗"
+            },
             "retryEnabled": "同通道重試",
             "retryEnabledHint": "啟用後，遇到 429/5xx 等可重試錯誤時先在同通道重試，全部失敗後透傳狀態碼給客戶端",
             "maxRetries": "最大重試",
             "maxRetriesHint": "同通道重試次數，僅在開啟同通道重試時生效",
+            "priorityHint": "故障轉移按列表順序 / priority 生效，數字越小越靠前；拖動項目即可調整順序。",
+            "weightHint": "加權分配按 weight 生效，數值越大越容易被選中；不代表優先級更高。",
+            "paidSiteLowRatioFirst": "付費站點低倍率優先",
+            "paidSiteLowRatioFirstDescription": "開啟後，只在帶「付費」標籤的站點投影候選內部按分組倍率由低到高排序；公益、無標籤和普通通道候選位置保持不變。",
+            "paidSiteLowRatioFirstHint": "依賴站點標籤和同步到站點分組的倍率資料；無倍率的付費候選會排在有倍率的付費候選之後。",
+            "weightInputLabel": "權重，數值越大越容易選中",
             "items": "已選模型",
             "addItem": "新增模型",
             "autoAdd": "自動新增",
@@ -608,6 +623,12 @@
             "random": "隨機",
             "failover": "故障轉移",
             "weighted": "加權分配"
+        },
+        "modeDescription": {
+            "roundRobin": "輪詢：按列表順序循環選擇可用供應源。",
+            "random": "隨機：每次從可用供應源中隨機選擇。",
+            "failover": "故障轉移：優先使用排序最靠前的可用供應源，當前候選失敗後再降級到下一個。",
+            "weighted": "加權分配：在可用供應源中按權重分配流量，權重越大命中機率越高。"
         },
         "health": {
             "title": "健康",

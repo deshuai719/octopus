@@ -225,6 +225,7 @@ func ImagesHandler(endpoint string, c *gin.Context) {
 
 		// 熔断器：记录失败
 		balancer.RecordFailure(channel.ID, usedKey.ID, item.ModelName, circuitFailureKind(group.RetryEnabled, statusCode))
+		iter.ClearStickyOnFailure()
 
 		if written {
 			metrics.SaveWithChannelStats(ctx, false, fwdErr, iter.Attempts(), false)

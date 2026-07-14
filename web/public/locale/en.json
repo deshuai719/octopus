@@ -591,11 +591,26 @@
             "firstTokenTimeOut": "First Token Timeout",
             "firstTokenTimeOutHint": "Unit: seconds, only effective for streaming response, 0 = no limit",
             "sessionKeepTime": "Session Keep Time",
-            "sessionKeepTimeHint": "Unit: seconds, keeps using the same channel within a session, 0 = disabled",
+            "sessionKeepTimeHint": "Unit: seconds, only effective in time-based mode, 0 = disabled",
+            "sessionKeepTimeDescription": "Time-based keep sticks the same session to the selected channel for the configured seconds; after expiry or failure, the current group strategy selects again.",
+            "sessionKeepTimeUntilFailureDescription": "Until-failure mode does not use seconds. The current sticky channel is released only after failure.",
+            "sessionKeepMode": "Keep Mode",
+            "sessionKeepModeHint": "Keep mode is not a load-balancing strategy. When there is no sticky channel, or sticky is released, candidates are still selected by the current group mode.",
+            "sessionKeepModeDescription": "Until-failure keeps reusing sticky until the channel fails. If the current sticky is a paid candidate and lower-ratio paid priority is enabled, it may switch to a lower-ratio paid candidate.",
+            "sessionKeepModeOptions": {
+                "ttl": "Time Based",
+                "until_failure": "Until Failure"
+            },
             "retryEnabled": "Same-Channel Retry",
             "retryEnabledHint": "When enabled, retries on the same channel for 429/5xx errors before passing through the status code to the client",
             "maxRetries": "Max Retries",
             "maxRetriesHint": "Same-channel retry count, only effective when same-channel retry is enabled",
+            "priorityHint": "Failover uses list order / priority. Smaller priority values are tried first; drag items to adjust the order.",
+            "weightHint": "Weighted mode uses weight. Larger values are more likely to be selected; weight is not priority.",
+            "paidSiteLowRatioFirst": "Prefer Lower Ratio Paid Sites",
+            "paidSiteLowRatioFirstDescription": "When enabled, only paid site projected candidates are sorted by group ratio from low to high. Public, untagged, and manual channel candidates keep their positions.",
+            "paidSiteLowRatioFirstHint": "Requires site tags and synced site group ratio data. Paid candidates without a ratio are placed after paid candidates with a ratio.",
+            "weightInputLabel": "Weight, larger values are more likely to be selected",
             "items": "Selected Models",
             "addItem": "Add Model",
             "autoAdd": "Auto Add",
@@ -608,6 +623,12 @@
             "random": "Random",
             "failover": "Failover",
             "weighted": "Weighted"
+        },
+        "modeDescription": {
+            "roundRobin": "Round robin: cycles through available channels in list order.",
+            "random": "Random: selects randomly from available channels for each request.",
+            "failover": "Failover: uses the first available candidate by order, then falls back to the next one after the current candidate fails.",
+            "weighted": "Weighted: distributes traffic among available channels by weight. Larger weights are more likely to be selected."
         },
         "health": {
             "title": "Health",

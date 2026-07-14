@@ -25,6 +25,8 @@ export enum GroupMode {
     Weighted = 4,
 }
 
+export type GroupSessionKeepMode = 'ttl' | 'until_failure';
+
 /**
  * 分组信息
  */
@@ -35,8 +37,10 @@ export interface Group {
     match_regex: string;
     first_token_time_out?: number;
     session_keep_time?: number;
+    session_keep_mode?: GroupSessionKeepMode;
     retry_enabled?: boolean;
     max_retries?: number;
+    paid_site_low_ratio_first?: boolean;
     pinned?: boolean;
     pinned_at?: string | null;
     active_preset_id?: number | null;
@@ -64,8 +68,10 @@ export interface GroupPreset {
     match_regex: string;
     first_token_time_out: number;
     session_keep_time: number;
+    session_keep_mode: GroupSessionKeepMode;
     retry_enabled: boolean;
     max_retries: number;
+    paid_site_low_ratio_first: boolean;
     items: GroupPresetItem[];
     created_at: string;
     updated_at: string;
@@ -81,8 +87,10 @@ export interface GroupPresetUpdateRequest {
     match_regex?: string;
     first_token_time_out?: number;
     session_keep_time?: number;
+    session_keep_mode?: GroupSessionKeepMode;
     retry_enabled?: boolean;
     max_retries?: number;
+    paid_site_low_ratio_first?: boolean;
     items?: GroupPresetItem[];
 }
 
@@ -115,8 +123,10 @@ export interface GroupUpdateRequest {
     match_regex?: string;                 // 仅在匹配正则变更时发送
     first_token_time_out?: number;        // 仅在超时变更时发送
     session_keep_time?: number;           // 仅在会话保持时间变更时发送
+    session_keep_mode?: GroupSessionKeepMode;
     retry_enabled?: boolean;              // 仅在同通道重试开关变更时发送
     max_retries?: number;                 // 仅在最大重试次数变更时发送
+    paid_site_low_ratio_first?: boolean;
     items_to_add?: GroupItemAddRequest[];    // 新增的 items
     items_to_update?: GroupItemUpdateRequest[]; // 更新的 items (priority 变更)
     items_to_delete?: number[];              // 删除的 item IDs
@@ -237,8 +247,10 @@ function applyGroupUpdate(group: Group, req: GroupUpdateRequest): Group {
     if (req.match_regex !== undefined) next.match_regex = req.match_regex;
     if (req.first_token_time_out !== undefined) next.first_token_time_out = req.first_token_time_out;
     if (req.session_keep_time !== undefined) next.session_keep_time = req.session_keep_time;
+    if (req.session_keep_mode !== undefined) next.session_keep_mode = req.session_keep_mode;
     if (req.retry_enabled !== undefined) next.retry_enabled = req.retry_enabled;
     if (req.max_retries !== undefined) next.max_retries = req.max_retries;
+    if (req.paid_site_low_ratio_first !== undefined) next.paid_site_low_ratio_first = req.paid_site_low_ratio_first;
 
     let items = [...(group.items ?? [])];
     if (req.items_to_delete?.length) {
@@ -536,4 +548,3 @@ export function useToggleGroupPin() {
         onError: (error) => logger.error('置顶切换失败:', error),
     });
 }
-

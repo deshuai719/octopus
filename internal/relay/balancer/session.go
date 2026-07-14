@@ -40,6 +40,20 @@ func GetSticky(apiKeyID int, requestModel string, ttl time.Duration) *SessionEnt
 	return entry
 }
 
+func GetStickyUntilFailure(apiKeyID int, requestModel string) *SessionEntry {
+	key := sessionKey(apiKeyID, requestModel)
+	v, ok := globalSession.Load(key)
+	if !ok {
+		return nil
+	}
+	entry, ok := v.(*SessionEntry)
+	if !ok {
+		globalSession.Delete(key)
+		return nil
+	}
+	return entry
+}
+
 // SetSticky 写入/更新粘性记录
 func SetSticky(apiKeyID int, requestModel string, channelID, keyID int) {
 	key := sessionKey(apiKeyID, requestModel)

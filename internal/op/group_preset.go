@@ -28,7 +28,7 @@ func GroupPresetList(groupID int, ctx context.Context) ([]model.GroupPreset, err
 }
 
 // groupPresetSnapshotFromCache 从缓存中的 Group 取当前实时状态的快照
-func groupPresetSnapshotFromCache(groupID int) (mode model.GroupMode, matchRegex string, firstTokenTimeOut, sessionKeepTime, maxRetries int, retryEnabled bool, items []model.GroupPresetItem, err error) {
+func groupPresetSnapshotFromCache(groupID int) (mode model.GroupMode, matchRegex string, firstTokenTimeOut, sessionKeepTime, maxRetries int, sessionKeepMode model.GroupSessionKeepMode, retryEnabled, paidSiteLowRatioFirst bool, items []model.GroupPresetItem, err error) {
 	group, ok := groupCache.Get(groupID)
 	if !ok {
 		err = fmt.Errorf("group not found")
@@ -38,8 +38,10 @@ func groupPresetSnapshotFromCache(groupID int) (mode model.GroupMode, matchRegex
 	matchRegex = group.MatchRegex
 	firstTokenTimeOut = group.FirstTokenTimeOut
 	sessionKeepTime = group.SessionKeepTime
+	sessionKeepMode = group.EffectiveSessionKeepMode()
 	maxRetries = group.MaxRetries
 	retryEnabled = group.RetryEnabled
+	paidSiteLowRatioFirst = group.PaidSiteLowRatioFirst
 	items = make([]model.GroupPresetItem, 0, len(group.Items))
 	for _, it := range group.Items {
 		items = append(items, model.GroupPresetItem{
@@ -58,20 +60,22 @@ func GroupPresetCreate(groupID int, name string, ctx context.Context) (*model.Gr
 	if name == "" {
 		return nil, fmt.Errorf("preset name required")
 	}
-	mode, matchRegex, fto, skt, mr, re, items, err := groupPresetSnapshotFromCache(groupID)
+	mode, matchRegex, fto, skt, mr, sessionKeepMode, re, paidSiteLowRatioFirst, items, err := groupPresetSnapshotFromCache(groupID)
 	if err != nil {
 		return nil, err
 	}
 	preset := model.GroupPreset{
-		GroupID:           groupID,
-		Name:              name,
-		Mode:              mode,
-		MatchRegex:        matchRegex,
-		FirstTokenTimeOut: fto,
-		SessionKeepTime:   skt,
-		RetryEnabled:      re,
-		MaxRetries:        mr,
-		Items:             items,
+		GroupID:               groupID,
+		Name:                  name,
+		Mode:                  mode,
+		MatchRegex:            matchRegex,
+		FirstTokenTimeOut:     fto,
+		SessionKeepTime:       skt,
+		SessionKeepMode:       sessionKeepMode,
+		RetryEnabled:          re,
+		MaxRetries:            mr,
+		PaidSiteLowRatioFirst: paidSiteLowRatioFirst,
+		Items:                 items,
 	}
 	if err := db.GetDB().WithContext(ctx).Create(&preset).Error; err != nil {
 		return nil, fmt.Errorf("failed to create preset: %w", err)
@@ -90,11 +94,13 @@ func GroupPresetCreateBlank(groupID int, name string, ctx context.Context) (*mod
 		return nil, fmt.Errorf("group not found")
 	}
 	preset := model.GroupPreset{
-		GroupID:    groupID,
-		Name:       name,
-		Mode:       model.GroupModeRoundRobin,
-		MaxRetries: 3,
-		Items:      []model.GroupPresetItem{},
+		GroupID:               groupID,
+		Name:                  name,
+		Mode:                  model.GroupModeRoundRobin,
+		SessionKeepMode:       model.GroupSessionKeepModeTTL,
+		MaxRetries:            3,
+		PaidSiteLowRatioFirst: false,
+		Items:                 []model.GroupPresetItem{},
 	}
 	if err := db.GetDB().WithContext(ctx).Create(&preset).Error; err != nil {
 		return nil, fmt.Errorf("failed to create blank preset: %w", err)
@@ -132,15 +138,17 @@ func GroupPresetClone(presetID int, newName string, ctx context.Context) (*model
 	copy(items, source.Items)
 
 	clone := model.GroupPreset{
-		GroupID:           source.GroupID,
-		Name:              finalName,
-		Mode:              source.Mode,
-		MatchRegex:        source.MatchRegex,
-		FirstTokenTimeOut: source.FirstTokenTimeOut,
-		SessionKeepTime:   source.SessionKeepTime,
-		RetryEnabled:      source.RetryEnabled,
-		MaxRetries:        source.MaxRetries,
-		Items:             items,
+		GroupID:               source.GroupID,
+		Name:                  finalName,
+		Mode:                  source.Mode,
+		MatchRegex:            source.MatchRegex,
+		FirstTokenTimeOut:     source.FirstTokenTimeOut,
+		SessionKeepTime:       source.SessionKeepTime,
+		SessionKeepMode:       model.NormalizeGroupSessionKeepMode(source.SessionKeepMode),
+		RetryEnabled:          source.RetryEnabled,
+		MaxRetries:            source.MaxRetries,
+		PaidSiteLowRatioFirst: source.PaidSiteLowRatioFirst,
+		Items:                 items,
 	}
 	if err := db.GetDB().WithContext(ctx).Create(&clone).Error; err != nil {
 		return nil, fmt.Errorf("failed to clone preset: %w", err)
@@ -195,12 +203,14 @@ func mirrorPresetToActiveGroupTx(tx *gorm.DB, preset *model.GroupPreset) (groupI
 	if err = tx.Model(&model.Group{}).
 		Where("id = ?", group.ID).
 		Updates(map[string]interface{}{
-			"mode":                 preset.Mode,
-			"match_regex":          preset.MatchRegex,
-			"first_token_time_out": preset.FirstTokenTimeOut,
-			"session_keep_time":    preset.SessionKeepTime,
-			"retry_enabled":        preset.RetryEnabled,
-			"max_retries":          maxRetries,
+			"mode":                      preset.Mode,
+			"match_regex":               preset.MatchRegex,
+			"first_token_time_out":      preset.FirstTokenTimeOut,
+			"session_keep_time":         preset.SessionKeepTime,
+			"session_keep_mode":         model.NormalizeGroupSessionKeepMode(preset.SessionKeepMode),
+			"retry_enabled":             preset.RetryEnabled,
+			"max_retries":               maxRetries,
+			"paid_site_low_ratio_first": preset.PaidSiteLowRatioFirst,
 		}).Error; err != nil {
 		return group.ID, ids, fmt.Errorf("failed to mirror preset to group: %w", err)
 	}
@@ -270,8 +280,10 @@ func syncActivePresetTx(tx *gorm.DB, groupID int) error {
 	preset.MatchRegex = group.MatchRegex
 	preset.FirstTokenTimeOut = group.FirstTokenTimeOut
 	preset.SessionKeepTime = group.SessionKeepTime
+	preset.SessionKeepMode = group.EffectiveSessionKeepMode()
 	preset.RetryEnabled = group.RetryEnabled
 	preset.MaxRetries = group.MaxRetries
+	preset.PaidSiteLowRatioFirst = group.PaidSiteLowRatioFirst
 	preset.Items = presetItems
 
 	if err := tx.Save(&preset).Error; err != nil {
@@ -306,6 +318,9 @@ func GroupPresetUpdate(presetID int, req *model.GroupPresetUpdateRequest, ctx co
 		if req.SessionKeepTime != nil {
 			preset.SessionKeepTime = *req.SessionKeepTime
 		}
+		if req.SessionKeepMode != nil {
+			preset.SessionKeepMode = model.NormalizeGroupSessionKeepMode(*req.SessionKeepMode)
+		}
 		if req.RetryEnabled != nil {
 			preset.RetryEnabled = *req.RetryEnabled
 		}
@@ -315,6 +330,9 @@ func GroupPresetUpdate(presetID int, req *model.GroupPresetUpdateRequest, ctx co
 				v = 3
 			}
 			preset.MaxRetries = v
+		}
+		if req.PaidSiteLowRatioFirst != nil {
+			preset.PaidSiteLowRatioFirst = *req.PaidSiteLowRatioFirst
 		}
 		if req.Items != nil {
 			preset.Items = *req.Items
@@ -441,13 +459,15 @@ func GroupPresetActivate(presetID int, ctx context.Context) error {
 	if err := tx.Model(&model.Group{}).
 		Where("id = ?", preset.GroupID).
 		Updates(map[string]interface{}{
-			"mode":                 preset.Mode,
-			"match_regex":          preset.MatchRegex,
-			"first_token_time_out": preset.FirstTokenTimeOut,
-			"session_keep_time":    preset.SessionKeepTime,
-			"retry_enabled":        preset.RetryEnabled,
-			"max_retries":          maxRetries,
-			"active_preset_id":     preset.ID,
+			"mode":                      preset.Mode,
+			"match_regex":               preset.MatchRegex,
+			"first_token_time_out":      preset.FirstTokenTimeOut,
+			"session_keep_time":         preset.SessionKeepTime,
+			"session_keep_mode":         model.NormalizeGroupSessionKeepMode(preset.SessionKeepMode),
+			"retry_enabled":             preset.RetryEnabled,
+			"max_retries":               maxRetries,
+			"paid_site_low_ratio_first": preset.PaidSiteLowRatioFirst,
+			"active_preset_id":          preset.ID,
 		}).Error; err != nil {
 		tx.Rollback()
 		return fmt.Errorf("failed to update group: %w", err)

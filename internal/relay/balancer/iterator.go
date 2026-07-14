@@ -10,11 +10,14 @@ import (
 // Iterator 统一的负载均衡迭代器
 // 内部编排：策略排序 + 粘性优先 + 决策追踪
 type Iterator struct {
-	candidates  []model.GroupItem
-	index       int
-	stickyIdx   int // 粘性通道在 candidates 中的位置，-1 表示无
-	stickyKeyID int
-	modelName   string // 请求模型名（用于熔断检查）
+	candidates           []model.GroupItem
+	index                int
+	stickyIdx            int // 粘性通道在 candidates 中的位置，-1 表示无
+	stickyKeyID          int
+	modelName            string // 请求模型名（用于熔断检查）
+	apiKeyID             int
+	requestModel         string
+	clearStickyOnFailure bool
 
 	// 内嵌追踪
 	attempts []model.ChannelAttempt
@@ -32,9 +35,11 @@ func NewIterator(group model.Group, apiKeyID int, requestModel string) *Iterator
 func NewIteratorWithPreference(group model.Group, apiKeyID int, requestModel string, preferred *SessionEntry) *Iterator {
 	b := GetBalancer(group.Mode)
 	candidates := b.Candidates(group.Items)
+	applyPaidSiteLowRatioFirst(candidates, group.PaidSiteLowRatioFirst)
 
 	stickyIdx := -1
 	stickyKeyID := 0
+	clearStickyOnFailure := false
 	if preferred != nil && preferred.ChannelID > 0 {
 		for i, item := range candidates {
 			if item.ChannelID == preferred.ChannelID {
@@ -49,32 +54,85 @@ func NewIteratorWithPreference(group model.Group, apiKeyID int, requestModel str
 			}
 		}
 	}
-	if stickyIdx < 0 && group.SessionKeepTime > 0 {
-		stickyTTL := time.Duration(group.SessionKeepTime) * time.Second
-		if sticky := GetSticky(apiKeyID, requestModel, stickyTTL); sticky != nil {
-			for i, item := range candidates {
-				if item.ChannelID == sticky.ChannelID {
-					if i > 0 {
-						// 将粘性通道移到最前面
-						stickyItem := candidates[i]
-						copy(candidates[1:i+1], candidates[0:i])
-						candidates[0] = stickyItem
-					}
-					stickyIdx = 0
-					stickyKeyID = sticky.ChannelKeyID
-					break
-				}
-			}
+	if stickyIdx < 0 {
+		sticky := stickyForGroup(group, apiKeyID, requestModel)
+		if sticky != nil {
+			stickyIdx, stickyKeyID = applyStickyPreference(group, candidates, sticky)
+			clearStickyOnFailure = stickyIdx >= 0 && group.SessionKeepsUntilFailure()
 		}
 	}
 
 	return &Iterator{
-		candidates:  candidates,
-		index:       -1,
-		stickyIdx:   stickyIdx,
-		stickyKeyID: stickyKeyID,
-		modelName:   requestModel,
+		candidates:           candidates,
+		index:                -1,
+		stickyIdx:            stickyIdx,
+		stickyKeyID:          stickyKeyID,
+		modelName:            requestModel,
+		apiKeyID:             apiKeyID,
+		requestModel:         requestModel,
+		clearStickyOnFailure: clearStickyOnFailure,
 	}
+}
+
+func stickyForGroup(group model.Group, apiKeyID int, requestModel string) *SessionEntry {
+	if group.SessionKeepsUntilFailure() {
+		return GetStickyUntilFailure(apiKeyID, requestModel)
+	}
+	if group.SessionKeepTime <= 0 {
+		return nil
+	}
+	stickyTTL := time.Duration(group.SessionKeepTime) * time.Second
+	return GetSticky(apiKeyID, requestModel, stickyTTL)
+}
+
+func applyStickyPreference(group model.Group, candidates []model.GroupItem, sticky *SessionEntry) (int, int) {
+	if sticky == nil || sticky.ChannelID <= 0 {
+		return -1, 0
+	}
+	for i, item := range candidates {
+		if item.ChannelID != sticky.ChannelID {
+			continue
+		}
+		if !shouldPreferExistingSticky(group, candidates, i) {
+			return i, sticky.ChannelKeyID
+		}
+		if i > 0 {
+			stickyItem := candidates[i]
+			copy(candidates[1:i+1], candidates[0:i])
+			candidates[0] = stickyItem
+		}
+		return 0, sticky.ChannelKeyID
+	}
+	return -1, 0
+}
+
+func shouldPreferExistingSticky(group model.Group, candidates []model.GroupItem, stickyIdx int) bool {
+	if !group.SessionKeepsUntilFailure() || !group.PaidSiteLowRatioFirst {
+		return true
+	}
+	if stickyIdx < 0 || stickyIdx >= len(candidates) {
+		return true
+	}
+	stickyItem := candidates[stickyIdx]
+	if !stickyItem.PaidSite {
+		return true
+	}
+	for i := 0; i < stickyIdx; i++ {
+		item := candidates[i]
+		if !item.PaidSite {
+			continue
+		}
+		if stickyItem.SiteGroupRatio == nil {
+			if item.SiteGroupRatio != nil {
+				return false
+			}
+			continue
+		}
+		if item.SiteGroupRatio != nil && *item.SiteGroupRatio < *stickyItem.SiteGroupRatio {
+			return false
+		}
+	}
+	return true
 }
 
 // Next 移动到下一个候选，返回 false 表示遍历完成
@@ -91,6 +149,16 @@ func (it *Iterator) Item() model.GroupItem {
 // IsSticky 当前候选是否为粘性通道
 func (it *Iterator) IsSticky() bool {
 	return it.stickyIdx >= 0 && it.index == it.stickyIdx
+}
+
+func (it *Iterator) ClearStickyOnFailure() {
+	if it == nil || !it.clearStickyOnFailure || !it.IsSticky() {
+		return
+	}
+	DeleteSticky(it.apiKeyID, it.requestModel)
+	it.stickyIdx = -1
+	it.stickyKeyID = 0
+	it.clearStickyOnFailure = false
 }
 
 func (it *Iterator) StickyKeyID() int {
@@ -123,6 +191,7 @@ func (it *Iterator) Skip(channelID, channelKeyID int, channelName, msg string) {
 		Sticky:       it.IsSticky(),
 		Msg:          msg,
 	})
+	it.ClearStickyOnFailure()
 }
 
 // SkipCircuitBreak 检查熔断状态，若已熔断自动记录（含剩余冷却时间）并返回 true
@@ -147,6 +216,7 @@ func (it *Iterator) SkipCircuitBreak(channelID, channelKeyID int, channelName st
 		Sticky:       it.IsSticky(),
 		Msg:          msg,
 	})
+	it.ClearStickyOnFailure()
 	return true
 }
 

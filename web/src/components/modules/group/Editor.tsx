@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useMemo, useState, type FormEvent } from 'react';
-import { Check, ChevronDownIcon, Plus, Search, Sparkles, Trash2 } from 'lucide-react';
+import { Check, ChevronDownIcon, Info, Plus, Search, Sparkles, Trash2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import * as AccordionPrimitive from '@radix-ui/react-accordion';
 import { useModelChannelList, type LLMChannel } from '@/api/endpoints/model';
@@ -12,7 +12,7 @@ import { Switch } from '@/components/ui/switch';
 import { Accordion, AccordionContent, AccordionItem } from '@/components/ui/accordion';
 import { cn } from '@/lib/utils';
 import { getModelIcon } from '@/lib/model-icons';
-import type { GroupMode } from '@/api/endpoints/group';
+import type { GroupMode, GroupSessionKeepMode } from '@/api/endpoints/group';
 import type { SelectedMember } from './ItemList';
 import { MemberList } from './ItemList';
 import { matchesGroupName, memberKey, normalizeKey, MODE_LABELS } from './utils';
@@ -27,10 +27,32 @@ export type GroupEditorValues = {
     mode: GroupMode;
     first_token_time_out: number;
     session_keep_time: number;
+    session_keep_mode: GroupSessionKeepMode;
     retry_enabled: boolean;
     max_retries: number;
+    paid_site_low_ratio_first: boolean;
     members: SelectedMember[];
 };
+
+function ModeHelp({ mode }: { mode: GroupMode }) {
+    const t = useTranslations('group');
+
+    return (
+        <div className="rounded-xl border border-border/50 bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
+            <div className="flex items-start gap-2">
+                <Info className="mt-0.5 size-3.5 shrink-0" />
+                <div className="space-y-1">
+                    <p>{t(`modeDescription.${MODE_LABELS[mode]}`)}</p>
+                    {mode === 3 || mode === 4 ? (
+                        <p>
+                            {mode === 3 ? t('form.priorityHint') : t('form.weightHint')}
+                        </p>
+                    ) : null}
+                </div>
+            </div>
+        </div>
+    );
+}
 
 function ModelPickerSection({
     modelChannels,
@@ -275,8 +297,10 @@ export function GroupEditor({
     const [mode, setMode] = useState<GroupMode>((initial?.mode ?? 1) as GroupMode);
     const [firstTokenTimeOut, setFirstTokenTimeOut] = useState<number>(initial?.first_token_time_out ?? 0);
     const [sessionKeepTime, setSessionKeepTime] = useState<number>(initial?.session_keep_time ?? 0);
+    const [sessionKeepMode, setSessionKeepMode] = useState<GroupSessionKeepMode>(initial?.session_keep_mode ?? 'ttl');
     const [retryEnabled, setRetryEnabled] = useState<boolean>(initial?.retry_enabled ?? false);
     const [maxRetries, setMaxRetries] = useState<number>(initial?.max_retries ?? 3);
+    const [paidSiteLowRatioFirst, setPaidSiteLowRatioFirst] = useState<boolean>(initial?.paid_site_low_ratio_first ?? false);
     const [selectedMembers, setSelectedMembers] = useState<SelectedMember[]>(initial?.members ?? []);
     const [removingIds, setRemovingIds] = useState<Set<string>>(new Set());
 
@@ -360,8 +384,10 @@ export function GroupEditor({
             mode,
             first_token_time_out: firstTokenTimeOut,
             session_keep_time: sessionKeepTime,
+            session_keep_mode: sessionKeepMode,
             retry_enabled: retryEnabled,
             max_retries: maxRetries,
+            paid_site_low_ratio_first: paidSiteLowRatioFirst,
             members: selectedMembers,
         });
     };
@@ -451,6 +477,7 @@ export function GroupEditor({
                                 inputMode="numeric"
                                 min={0}
                                 step={1}
+                                disabled={sessionKeepMode === 'until_failure'}
                                 value={String(sessionKeepTime)}
                                 onChange={(e) => {
                                     const raw = e.target.value;
@@ -463,6 +490,47 @@ export function GroupEditor({
                                 }}
                                 className="rounded-xl"
                             />
+                            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                                {sessionKeepMode === 'until_failure'
+                                    ? t('form.sessionKeepTimeUntilFailureDescription')
+                                    : t('form.sessionKeepTimeDescription')}
+                            </p>
+                        </Field>
+
+                        <Field>
+                            <FieldLabel htmlFor="group-session-keep-mode">
+                                {t('form.sessionKeepMode')}
+                                <TooltipProvider>
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <HelpCircle className="size-4 text-muted-foreground cursor-help" />
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                            {t('form.sessionKeepModeHint')}
+                                        </TooltipContent>
+                                    </Tooltip>
+                                </TooltipProvider>
+                            </FieldLabel>
+                            <div id="group-session-keep-mode" className="flex gap-1 rounded-xl bg-muted p-1">
+                                {(['ttl', 'until_failure'] as const).map((value) => (
+                                    <button
+                                        key={value}
+                                        type="button"
+                                        onClick={() => setSessionKeepMode(value)}
+                                        className={cn(
+                                            'flex-1 rounded-lg px-2 py-2 text-xs transition-colors',
+                                            sessionKeepMode === value
+                                                ? 'bg-primary text-primary-foreground'
+                                                : 'text-muted-foreground hover:bg-background/80 hover:text-foreground'
+                                        )}
+                                    >
+                                        {t(`form.sessionKeepModeOptions.${value}`)}
+                                    </button>
+                                ))}
+                            </div>
+                            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                                {t('form.sessionKeepModeDescription')}
+                            </p>
                         </Field>
                     </div>
 
@@ -528,6 +596,35 @@ export function GroupEditor({
                             </TooltipProvider>
                         )}
                     </div>
+
+                    <div className="rounded-xl border border-border/50 bg-muted/30 px-3 py-2">
+                        <TooltipProvider>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <label className="flex cursor-pointer items-start justify-between gap-3">
+                                        <span className="min-w-0">
+                                            <span className="block text-sm font-medium text-foreground">
+                                                {t('form.paidSiteLowRatioFirst')}
+                                            </span>
+                                            <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                                                {t('form.paidSiteLowRatioFirstDescription')}
+                                            </span>
+                                        </span>
+                                        <Switch
+                                            className="mt-0.5 shrink-0"
+                                            checked={paidSiteLowRatioFirst}
+                                            onCheckedChange={setPaidSiteLowRatioFirst}
+                                        />
+                                    </label>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                    {t('form.paidSiteLowRatioFirstHint')}
+                                </TooltipContent>
+                            </Tooltip>
+                        </TooltipProvider>
+                    </div>
+
+                    <ModeHelp mode={mode} />
 
                     <div className="flex-1 min-h-0">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full min-h-0">

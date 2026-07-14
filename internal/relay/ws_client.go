@@ -340,9 +340,11 @@ func bestEffortWarmupUpstreamWS(
 		channel, err := op.ChannelGet(item.ChannelID, ctx)
 		if err != nil {
 			lastErr = err
+			iter.ClearStickyOnFailure()
 			continue
 		}
 		if !channel.Enabled || channel.Type != outbound.OutboundTypeOpenAIResponse {
+			iter.ClearStickyOnFailure()
 			continue
 		}
 
@@ -364,6 +366,7 @@ func bestEffortWarmupUpstreamWS(
 			if err := warmupUpstreamWSConnection(ctx, channel, usedKey); err != nil {
 				lastErr = err
 				selectOpts.ExcludeKeyIDs[usedKey.ID] = struct{}{}
+				iter.ClearStickyOnFailure()
 				continue
 			}
 
@@ -585,6 +588,7 @@ func runWSRelay(ctx context.Context, req *relayRequest, group *dbmodel.Group) ws
 				failureKind = balancer.FailureHard
 			}
 			balancer.RecordFailure(channel.ID, usedKey.ID, req.internalRequest.Model, failureKind)
+			req.iter.ClearStickyOnFailure()
 		}
 
 		if result.Success {

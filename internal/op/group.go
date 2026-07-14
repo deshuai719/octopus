@@ -57,7 +57,150 @@ func GroupGetEnabledMap(name string, ctx context.Context) (model.Group, error) {
 		enabledItems = append(enabledItems, item)
 	}
 	group.Items = enabledItems
+	if group.PaidSiteLowRatioFirst {
+		if err := hydratePaidSiteLowRatioMetadata(&group, ctx); err != nil {
+			return model.Group{}, err
+		}
+	}
 	return group, nil
+}
+
+func hydratePaidSiteLowRatioMetadata(group *model.Group, ctx context.Context) error {
+	if group == nil || len(group.Items) == 0 {
+		return nil
+	}
+
+	channelIDs := make([]int, 0, len(group.Items))
+	seenChannelID := make(map[int]struct{}, len(group.Items))
+	for _, item := range group.Items {
+		if _, ok := seenChannelID[item.ChannelID]; ok {
+			continue
+		}
+		seenChannelID[item.ChannelID] = struct{}{}
+		channelIDs = append(channelIDs, item.ChannelID)
+	}
+
+	bindingByChannelID, err := SiteChannelBindingMapByChannelIDs(channelIDs, ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load site channel bindings for paid low ratio routing: %w", err)
+	}
+	if len(bindingByChannelID) == 0 {
+		return nil
+	}
+
+	siteIDs := make([]int, 0, len(bindingByChannelID))
+	siteIDSeen := make(map[int]struct{}, len(bindingByChannelID))
+	groupIDs := make([]int, 0, len(bindingByChannelID))
+	groupIDSeen := make(map[int]struct{}, len(bindingByChannelID))
+	accountIDs := make([]int, 0, len(bindingByChannelID))
+	accountIDSeen := make(map[int]struct{}, len(bindingByChannelID))
+	groupKeySeen := make(map[string]struct{}, len(bindingByChannelID))
+	groupKeys := make([]string, 0, len(bindingByChannelID))
+	for _, binding := range bindingByChannelID {
+		if _, ok := siteIDSeen[binding.SiteID]; !ok {
+			siteIDSeen[binding.SiteID] = struct{}{}
+			siteIDs = append(siteIDs, binding.SiteID)
+		}
+		if binding.SiteUserGroupID != nil && *binding.SiteUserGroupID > 0 {
+			if _, ok := groupIDSeen[*binding.SiteUserGroupID]; !ok {
+				groupIDSeen[*binding.SiteUserGroupID] = struct{}{}
+				groupIDs = append(groupIDs, *binding.SiteUserGroupID)
+			}
+		} else {
+			if _, ok := accountIDSeen[binding.SiteAccountID]; !ok {
+				accountIDSeen[binding.SiteAccountID] = struct{}{}
+				accountIDs = append(accountIDs, binding.SiteAccountID)
+			}
+			baseGroupKey, _ := model.ParseSiteChannelBindingKey(binding.GroupKey)
+			if _, ok := groupKeySeen[baseGroupKey]; !ok {
+				groupKeySeen[baseGroupKey] = struct{}{}
+				groupKeys = append(groupKeys, baseGroupKey)
+			}
+		}
+	}
+
+	siteByID := make(map[int]model.Site, len(siteIDs))
+	if len(siteIDs) > 0 {
+		var sites []model.Site
+		if err := db.GetDB().WithContext(ctx).
+			Select("id", "tags").
+			Where("id IN ?", siteIDs).
+			Find(&sites).Error; err != nil {
+			return fmt.Errorf("failed to load sites for paid low ratio routing: %w", err)
+		}
+		for _, site := range sites {
+			siteByID[site.ID] = site
+		}
+	}
+
+	groupByID := make(map[int]model.SiteUserGroup, len(groupIDs))
+	if len(groupIDs) > 0 {
+		var groups []model.SiteUserGroup
+		if err := db.GetDB().WithContext(ctx).
+			Select("id", "ratio").
+			Where("id IN ?", groupIDs).
+			Find(&groups).Error; err != nil {
+			return fmt.Errorf("failed to load site user groups for paid low ratio routing: %w", err)
+		}
+		for _, siteGroup := range groups {
+			groupByID[siteGroup.ID] = siteGroup
+		}
+	}
+
+	groupByAccountKey := make(map[string]model.SiteUserGroup)
+	if len(accountIDs) > 0 && len(groupKeys) > 0 {
+		var groups []model.SiteUserGroup
+		if err := db.GetDB().WithContext(ctx).
+			Select("id", "site_account_id", "group_key", "ratio").
+			Where("site_account_id IN ? AND group_key IN ?", accountIDs, groupKeys).
+			Find(&groups).Error; err != nil {
+			return fmt.Errorf("failed to load site user groups by key for paid low ratio routing: %w", err)
+		}
+		for _, siteGroup := range groups {
+			groupByAccountKey[siteUserGroupAccountKey(siteGroup.SiteAccountID, siteGroup.GroupKey)] = siteGroup
+		}
+	}
+
+	for i := range group.Items {
+		binding, ok := bindingByChannelID[group.Items[i].ChannelID]
+		if !ok {
+			continue
+		}
+		site, ok := siteByID[binding.SiteID]
+		if !ok || !isPaidSiteTags(site.Tags) {
+			continue
+		}
+		group.Items[i].PaidSite = true
+		if binding.SiteUserGroupID != nil {
+			if siteGroup, ok := groupByID[*binding.SiteUserGroupID]; ok {
+				group.Items[i].SiteGroupRatio = siteGroup.Ratio
+			}
+			continue
+		}
+		baseGroupKey, _ := model.ParseSiteChannelBindingKey(binding.GroupKey)
+		if siteGroup, ok := groupByAccountKey[siteUserGroupAccountKey(binding.SiteAccountID, baseGroupKey)]; ok {
+			group.Items[i].SiteGroupRatio = siteGroup.Ratio
+		}
+	}
+
+	return nil
+}
+
+func isPaidSiteTags(tags []string) bool {
+	hasPaid := false
+	for _, tag := range tags {
+		switch tag {
+		case model.SiteTagPublic:
+			return false
+		case model.SiteTagPaid:
+			hasPaid = true
+		}
+	}
+	return hasPaid
+}
+
+func siteUserGroupAccountKey(accountID int, groupKey string) string {
+	return fmt.Sprintf("%d:%s", accountID, model.NormalizeSiteGroupKey(groupKey))
 }
 
 func GroupCreate(group *model.Group, ctx context.Context) error {
@@ -107,6 +250,10 @@ func GroupUpdate(req *model.GroupUpdateRequest, ctx context.Context) (*model.Gro
 		selectFields = append(selectFields, "session_keep_time")
 		updates.SessionKeepTime = *req.SessionKeepTime
 	}
+	if req.SessionKeepMode != nil {
+		selectFields = append(selectFields, "session_keep_mode")
+		updates.SessionKeepMode = model.NormalizeGroupSessionKeepMode(*req.SessionKeepMode)
+	}
 	if req.RetryEnabled != nil {
 		selectFields = append(selectFields, "retry_enabled")
 		updates.RetryEnabled = *req.RetryEnabled
@@ -118,6 +265,10 @@ func GroupUpdate(req *model.GroupUpdateRequest, ctx context.Context) (*model.Gro
 		}
 		selectFields = append(selectFields, "max_retries")
 		updates.MaxRetries = v
+	}
+	if req.PaidSiteLowRatioFirst != nil {
+		selectFields = append(selectFields, "paid_site_low_ratio_first")
+		updates.PaidSiteLowRatioFirst = *req.PaidSiteLowRatioFirst
 	}
 
 	if len(selectFields) > 0 {
@@ -207,7 +358,7 @@ func groupUpdateAffectedChannelIDs(oldGroup model.Group, req *model.GroupUpdateR
 	}
 
 	ids := make([]int, 0, len(oldGroup.Items)+len(req.ItemsToAdd))
-	if req.Mode != nil || req.SessionKeepTime != nil {
+	if req.Mode != nil || req.SessionKeepTime != nil || req.SessionKeepMode != nil || req.PaidSiteLowRatioFirst != nil {
 		for _, item := range oldGroup.Items {
 			ids = append(ids, item.ChannelID)
 		}

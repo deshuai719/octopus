@@ -76,8 +76,10 @@ export function PresetEditorContent({ preset }: PresetEditorContentProps) {
                     match_regex: values.match_regex,
                     first_token_time_out: values.first_token_time_out,
                     session_keep_time: values.session_keep_time,
+                    session_keep_mode: values.session_keep_mode,
                     retry_enabled: values.retry_enabled,
                     max_retries: values.max_retries,
+                    paid_site_low_ratio_first: values.paid_site_low_ratio_first,
                     items,
                 },
             },
@@ -120,8 +122,10 @@ export function PresetEditorContent({ preset }: PresetEditorContentProps) {
                         mode: preset.mode,
                         first_token_time_out: preset.first_token_time_out ?? 0,
                         session_keep_time: preset.session_keep_time ?? 0,
+                        session_keep_mode: preset.session_keep_mode ?? 'ttl',
                         retry_enabled: preset.retry_enabled ?? false,
                         max_retries: preset.max_retries ?? 3,
+                        paid_site_low_ratio_first: preset.paid_site_low_ratio_first ?? false,
                         members: initialMembers,
                     }}
                     submitText={t('preset.save')}
