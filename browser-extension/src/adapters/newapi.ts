@@ -155,6 +155,11 @@ export async function extractNewAPICredentials(
         reason: "system_token_missing",
         message: "已确认登录，但页面没有完整系统访问令牌",
         suggested_paths: ["/console/personal", "/setting", "/profile"],
+        platform_user_id: userID,
+        identity_label:
+          readString(nested(profile, "data", "username")) ??
+          readString(nested(profile, "data", "user", "username")) ??
+          readString(nested(browserUser, "username")),
       };
     }
   }

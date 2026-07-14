@@ -1,4 +1,13 @@
-export type PanelPrimaryAction = "capture" | "grant" | "extract" | null;
+export type PanelPrimaryAction =
+  | "capture"
+  | "grant"
+  | "extract"
+  | "generate_direct"
+  | "confirm_direct"
+  | "resolve_direct"
+  | "retry_sync"
+  | "confirm_rebind"
+  | null;
 
 export type PanelView = {
   status: string;

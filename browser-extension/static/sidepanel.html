@@ -32,11 +32,37 @@
             </div>
           </div>
           <ol id="steps" class="steps"></ol>
+          <div id="direct-preview" class="direct-preview" hidden>
+            <div class="preview-row"><span>操作</span><strong id="capture-action">—</strong></div>
+            <div class="preview-row"><span>凭据</span><code id="credential-mask">—</code></div>
+            <div class="preview-row"><span>用户 ID</span><strong id="platform-user-id">—</strong></div>
+            <label id="site-name-field" class="field" hidden>
+              <span>站点名称</span>
+              <input id="site-name" maxlength="128" autocomplete="off" />
+            </label>
+            <label id="account-name-field" class="field" hidden>
+              <span>账号名称</span>
+              <input id="account-name" maxlength="128" autocomplete="off" />
+            </label>
+            <label id="account-resolution-field" class="field" hidden>
+              <span>选择已有管理账号</span>
+              <select id="account-resolution"></select>
+            </label>
+            <label id="manual-token-field" class="field" hidden>
+              <span>推荐访问令牌（仅用于本次提交）</span>
+              <input id="manual-token" type="password" maxlength="16384" autocomplete="off" spellcheck="false" />
+            </label>
+            <button id="manual-token-action" class="secondary" hidden>使用此令牌继续</button>
+            <p id="capture-warning" class="warning" hidden></p>
+          </div>
         </div>
       </section>
 
       <div class="actions">
         <button id="primary-action" class="primary">读取当前标签页</button>
+        <button id="secondary-action" class="secondary" hidden></button>
+        <button id="copy-diagnostics" class="quiet">复制脱敏诊断</button>
+        <button id="clear-diagnostics" class="quiet">清空诊断</button>
         <button id="discard" class="quiet">清理扩展中的会话数据</button>
       </div>
 
