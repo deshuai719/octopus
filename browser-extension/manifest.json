@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Octopus 登录助手",
+  "version": "0.1.0",
+  "description": "在本机浏览器中辅助恢复 Octopus 站点登录凭据。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2uL4tYSNPBVzj3XlRNU6OzUHZFwjL8ydkmAgOrR0bIoVDDZVqNYhftALM4Jej8atLn2+dQ27Ktn54aaEgnyz1u41LuLf4NX9NuNCOe6OcjFJLTgBS/328PB525eyawvXuieBN1dOpVB+e827ACEssj8lcRvBtLd8xsAoG6tPY0+1gshzookHfW2nDnuHrEcRVoQ0X1Z7zAjGaay8vsCgof5LRU7M+OXClmvTP2CKVkw760XCyZAVLuT6IoHAMyPqAP3/8SIxYbqHCfA+jMVU8UQ5/dN/7AyZ+hEL8cLjQPJbVmxYwTeNMb44RXurvXXielhPN0ENlS0hC3rA+XwGOwIDAQAB",
+  "permissions": ["activeTab", "scripting", "storage", "tabs", "cookies", "sidePanel", "alarms"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": {
+    "service_worker": "worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "读取 Octopus 恢复会话"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  }
+}

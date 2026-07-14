@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Octopus 登录助手</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <main>
+      <header class="masthead">
+        <div class="mark" aria-hidden="true">O</div>
+        <div>
+          <p class="eyebrow">AUTH RECOVERY PASS</p>
+          <h1>Octopus 登录助手</h1>
+        </div>
+      </header>
+
+      <section class="passport" aria-live="polite">
+        <div class="rail" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="passport-body">
+          <p id="status" class="status">正在读取会话</p>
+          <p id="detail" class="detail">请保持 Octopus 恢复弹窗打开。</p>
+          <div id="endpoints" class="endpoints" hidden>
+            <div class="endpoint">
+              <span>Octopus 页面</span>
+              <code id="api-origin">—</code>
+            </div>
+            <div class="endpoint">
+              <span>要登录的网站</span>
+              <code id="target-origin">—</code>
+            </div>
+          </div>
+          <ol id="steps" class="steps"></ol>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button id="primary-action" class="primary">读取当前标签页</button>
+        <button id="discard" class="quiet">清理扩展中的会话数据</button>
+      </div>
+
+      <footer>
+        不读取密码 · 不绕过验证码 · 不保存 Cloudflare/WAF Cookie
+      </footer>
+    </main>
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>

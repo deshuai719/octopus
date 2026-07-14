@@ -1,0 +1,80 @@
+:root {
+  color-scheme: light dark;
+  --paper: #f3f7fb;
+  --ink: #0d1b2a;
+  --muted: #5d6b7a;
+  --line: #cfdae7;
+  --cobalt: #315efb;
+  --mint: #25b79f;
+  --night: #101d2d;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Segoe UI Variable", "Microsoft YaHei UI", system-ui, sans-serif;
+}
+
+main { min-height: 100vh; padding: 22px 18px 18px; }
+
+.masthead { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+.mark {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 13px 13px 13px 4px;
+  background: var(--night);
+  color: white;
+  font: 700 22px/1 ui-monospace, "Cascadia Code", monospace;
+}
+.eyebrow { margin: 0 0 3px; color: var(--cobalt); font: 700 10px/1.2 ui-monospace, "Cascadia Code", monospace; letter-spacing: 0; }
+h1 { margin: 0; font-size: 20px; line-height: 1.15; letter-spacing: 0; }
+
+.passport {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  box-shadow: 0 16px 40px rgb(13 27 42 / 9%);
+}
+.rail { display: flex; flex-direction: column; align-items: center; padding-top: 25px; background: var(--night); }
+.rail::before { content: ""; position: absolute; width: 1px; height: 145px; background: rgb(255 255 255 / 25%); }
+.rail span { z-index: 1; width: 8px; height: 8px; margin-bottom: 48px; border: 2px solid var(--night); border-radius: 50%; background: var(--mint); }
+.passport-body { min-height: 260px; padding: 22px 18px 20px; }
+.status { margin: 0; color: var(--ink); font-size: 17px; font-weight: 700; }
+.detail { margin: 8px 0 14px; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.endpoints { display: grid; gap: 8px; margin: 0 0 16px; }
+.endpoint { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid #dce5f0; border-radius: 6px; background: #e8eef8; }
+.endpoint span { color: var(--muted); font-size: 10px; font-weight: 650; }
+.endpoint code { color: #33465c; font: 11px/1.35 ui-monospace, "Cascadia Code", monospace; overflow-wrap: anywhere; }
+.steps { margin: 0; padding-left: 20px; color: #33465c; font-size: 12px; line-height: 1.55; }
+.steps li + li { margin-top: 6px; }
+
+.actions { display: grid; gap: 9px; margin-top: 16px; }
+button { min-height: 42px; border: 0; border-radius: 8px; padding: 10px 14px; font: 650 13px/1.25 system-ui, sans-serif; cursor: pointer; transition: transform 120ms ease, opacity 120ms ease; }
+button:hover:not(:disabled) { transform: translateY(-1px); }
+button:focus-visible { outline: 3px solid rgb(49 94 251 / 30%); outline-offset: 2px; }
+button:disabled { cursor: not-allowed; opacity: .42; }
+.primary { background: var(--cobalt); color: white; }
+.secondary { border: 1px solid var(--line); background: white; color: var(--ink); }
+.quiet { background: transparent; color: var(--muted); }
+footer { margin-top: 18px; color: var(--muted); font-size: 10px; line-height: 1.5; text-align: center; }
+
+@media (prefers-color-scheme: dark) {
+  :root { --paper: #0b1420; --ink: #eef5fc; --muted: #a6b4c3; --line: #2b3b4e; }
+  .passport, .secondary { background: #132235; }
+  .endpoint { border-color: #30455d; background: #1d3048; }
+  .endpoint code { color: #c2d2e3; }
+  .steps { color: #c2d2e3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button { transition: none; }
+}
