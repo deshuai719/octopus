@@ -19,6 +19,14 @@ const capture = (phase: string, overrides: Partial<DirectCaptureView> = {}): Dir
 });
 
 describe("direct capture progress", () => {
+  it("stops at site detection when capture validation fails", () => {
+    expect(states("capture_failed")).toEqual(["failed", "pending", "pending", "pending"]);
+  });
+
+  it("advances to preview delivery only after the site is identified", () => {
+    expect(states("previewing")).toEqual(["complete", "active", "pending", "pending"]);
+  });
+
   it("distinguishes preview delivery from account persistence", () => {
     expect(states("preview_ready")).toEqual(["complete", "complete", "pending", "pending"]);
     expect(captureReceiptFor(capture("preview_ready"))).toBeUndefined();

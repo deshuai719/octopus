@@ -90,6 +90,18 @@ function renderTransferProgress(phase: string): void {
   }
 }
 
+function renderCaptureFailure(message?: string): void {
+  clearDirectPreview();
+  renderTransferProgress("capture_failed");
+  renderView({
+    status: "传输未完成",
+    detail: message ?? "站点识别或预览验证失败，本次没有保存账号或凭据。",
+    primaryAction: "capture",
+    primaryLabel: "重新读取当前标签页",
+    primaryDisabled: false,
+  });
+}
+
 function clearTransferReceipt(): void {
   transferReceipt.hidden = true;
   transferReceipt.dataset.state = "";
@@ -221,6 +233,10 @@ async function refreshCapturePageOrigin(): Promise<void> {
 }
 
 function renderActiveContextResponse(response: WorkerResponse): void {
+  if (!response.ok) {
+    renderCaptureFailure(response.message);
+    return;
+  }
   if (response.capture) {
     if (response.binding?.origin) apiOrigin.textContent = response.binding.origin;
     renderCapture(response.capture);
@@ -252,14 +268,15 @@ async function captureActiveSession(): Promise<void> {
   const expectedOrigin = capturePageOrigin;
   if (!expectedOrigin) return renderView(waitingView("当前标签页不是可访问的 HTTP(S) 页面。"));
   clearDirectPreview();
+  endpoints.hidden = false;
+  targetOrigin.textContent = expectedOrigin;
   renderTransferProgress("reading");
   renderView(readingView());
   try {
     const response = await runWithRoutedPagePermission(expectedOrigin, () => send({ type: "capture_active_session", expected_origin: expectedOrigin }));
     renderActiveContextResponse(response);
   } catch (error) {
-    renderTransferProgress("capture_failed");
-    renderView(waitingView(error instanceof Error ? error.message : "无法读取当前标签页"));
+    renderCaptureFailure(error instanceof Error ? error.message : "无法读取当前标签页");
   }
 }
 
@@ -331,11 +348,17 @@ discardButton.addEventListener("click", async () => {
 });
 
 chrome.runtime.onMessage.addListener((event: SessionEvent) => {
-  if (event.type === "operation_error") renderView(waitingView(event.message));
+  if (event.type === "operation_error") {
+    if (!currentCapture && !transferProgress.hidden) renderCaptureFailure(event.message);
+    else if (!currentCapture) renderView(waitingView(event.message));
+  }
   else if (event.type === "binding_updated") void refreshActiveContext();
   else if (event.type === "binding_replacement_required") {
     clearContextDisplay();
     renderView({ status: "确认更换 Octopus", detail: `当前：${event.current_origin}\n新地址：${event.next_origin}\n换绑后旧实例中的未完成捕获将被清理。`, primaryAction: "confirm_rebind", primaryLabel: "确认更换 Octopus", primaryDisabled: false });
+  } else if (event.type === "direct_capture_progress" && event.origin === currentOrigin) {
+    renderTransferProgress(event.phase);
+    renderView({ status: "站点已识别", detail: "正在提取允许的登录信息并向 Octopus 发送脱敏预览。", primaryAction: null, primaryLabel: "正在送达预览", primaryDisabled: true });
   } else if (event.type === "direct_capture_updated" && event.origin === currentOrigin) renderCapture(event.capture);
   else if (event.type === "direct_capture_manual_required" && event.origin === currentOrigin) {
     renderView({ status: "需要系统令牌", detail: event.message, primaryAction: "generate_direct", primaryLabel: "生成系统令牌并继续", primaryDisabled: false });

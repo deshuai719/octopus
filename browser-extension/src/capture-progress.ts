@@ -49,6 +49,8 @@ export function transferProgressForPhase(phase: string): TransferProgressStep[] 
       return steps(["active", "pending", "pending", "pending"]);
     case "capture_failed":
       return steps(["failed", "pending", "pending", "pending"]);
+    case "previewing":
+      return steps(["complete", "active", "pending", "pending"]);
     case "resolution_required":
     case "preview_ready":
     case "canceled":

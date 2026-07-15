@@ -46,6 +46,14 @@ describe("side panel visibility contract", () => {
     expect(sidepanelScript).toContain("账号和凭据尚未写入");
   });
 
+  it("keeps validation failures on the real progress instead of a decorative rail", () => {
+    expect(sidepanelHTML).toContain('<div class="rail" aria-hidden="true"></div>');
+    expect(sidepanelHTML).not.toMatch(/class="rail"[^>]*>\s*<span/s);
+    expect(sidepanelScript).toContain("function renderCaptureFailure");
+    expect(sidepanelScript).toContain("renderCaptureFailure(response.message);");
+    expect(sidepanelScript).toContain("if (!currentCapture && !transferProgress.hidden) renderCaptureFailure(event.message);");
+  });
+
   it("contains no legacy recovery user flow", () => {
     for (const source of [sidepanelHTML, sidepanelScript, panelStateScript]) {
       expect(source).not.toMatch(/恢复页面|恢复会话|recovery capability/i);

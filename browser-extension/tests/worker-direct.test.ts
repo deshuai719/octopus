@@ -149,6 +149,11 @@ describe("direct capture worker flow", () => {
     expect(chrome.permissions.remove).toHaveBeenCalledWith({
       origins: ["https://relay.example/*"],
     });
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
+      type: "direct_capture_progress",
+      origin: "https://relay.example",
+      phase: "previewing",
+    });
   });
 
   it("restarts a completed origin with a new operation without clearing the binding", async () => {

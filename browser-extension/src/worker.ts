@@ -167,6 +167,7 @@ async function startDirectCapture(tabId: number, origin: string): Promise<Worker
       : "无法可靠识别当前平台或登录状态；本次没有读取或上传凭据";
     throw new Error(reason);
   }
+  await notifyPanel({ type: "direct_capture_progress", origin, phase: "previewing" });
   const extracted = await extractDirectCandidate(tabId, origin, discovery.platform, discovery.evidence, false);
   if (extracted.kind === "manual_required" && extracted.reason === "system_token_missing") {
     await putDirectSession({

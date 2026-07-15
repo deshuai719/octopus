@@ -47,9 +47,7 @@ h1 { margin: 0; font-size: 20px; line-height: 1.15; letter-spacing: 0; }
   background: white;
   box-shadow: 0 16px 40px rgb(13 27 42 / 9%);
 }
-.rail { display: flex; flex-direction: column; align-items: center; padding-top: 25px; background: var(--night); }
-.rail::before { content: ""; position: absolute; width: 1px; height: 145px; background: rgb(255 255 255 / 25%); }
-.rail span { z-index: 1; width: 8px; height: 8px; margin-bottom: 48px; border: 2px solid var(--night); border-radius: 50%; background: var(--mint); }
+.rail { background: var(--night); }
 .passport-body { min-height: 260px; padding: 22px 18px 20px; }
 .status { margin: 0; color: var(--ink); font-size: 17px; font-weight: 700; }
 .detail { margin: 8px 0 14px; color: var(--muted); font-size: 13px; line-height: 1.55; }

@@ -58,6 +58,7 @@ export type SessionEvent =
   | { type: "operation_error"; message: string }
   | { type: "binding_updated"; origin: string }
   | { type: "binding_replacement_required"; current_origin: string; next_origin: string }
+  | { type: "direct_capture_progress"; origin: string; phase: "previewing" }
   | { type: "direct_capture_updated"; origin: string; capture: DirectCaptureView }
   | { type: "direct_capture_manual_required"; origin: string; operation_id: string; platform: Platform; reason: string; message: string };
 
