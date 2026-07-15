@@ -22,7 +22,42 @@ type sub2APIRefreshedCredentials struct {
 	TokenExpiresAt int64
 }
 
+type Sub2APIAuthLease struct {
+	AccessToken    string
+	TokenExpiresAt int64
+	Changed        bool
+}
+
 var sub2APIRefreshGroup singleflight.Group
+
+// LeaseSub2APIAuth keeps refresh-token ownership inside Octopus. Callers only
+// receive the current access token and expiry, never the rotating refresh token.
+func LeaseSub2APIAuth(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, knownAccessTokenHash string, forceRefresh bool) (Sub2APIAuthLease, error) {
+	if siteRecord == nil || account == nil {
+		return Sub2APIAuthLease{}, fmt.Errorf("site or account is nil")
+	}
+	if siteRecord.Platform != model.SitePlatformSub2API {
+		return Sub2APIAuthLease{}, fmt.Errorf("site platform is not sub2api")
+	}
+	current := stripBearerPrefix(account.AccessToken)
+	if current == "" {
+		return Sub2APIAuthLease{}, newAccessTokenRequiredError()
+	}
+	currentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(current)))
+	knownAccessTokenHash = strings.ToLower(strings.TrimSpace(knownAccessTokenHash))
+	if knownAccessTokenHash != "" && knownAccessTokenHash != currentHash {
+		return Sub2APIAuthLease{AccessToken: current, TokenExpiresAt: account.TokenExpiresAt, Changed: true}, nil
+	}
+	leased, err := ensureFreshSub2APIAccessToken(ctx, siteRecord, account, forceRefresh)
+	if err != nil {
+		return Sub2APIAuthLease{}, err
+	}
+	return Sub2APIAuthLease{
+		AccessToken:    leased,
+		TokenExpiresAt: account.TokenExpiresAt,
+		Changed:        leased != current,
+	}, nil
+}
 
 func ensureFreshSub2APIAccessToken(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, forceRefresh bool) (string, error) {
 	if account == nil {

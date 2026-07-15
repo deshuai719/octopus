@@ -10,12 +10,14 @@ import { SettingReliability } from './Reliability';
 import { SettingSyncTasks } from './SyncTasks';
 import { SettingData } from './Data';
 import { SettingWebDAVBackup } from './WebDAVBackup';
+import { SettingIntegrationToken } from './IntegrationToken';
 
 export function Setting() {
     return (
         <div className="h-full min-h-0 overflow-y-auto overscroll-contain rounded-t-3xl">
             <PageWrapper className="columns-1 gap-4 pb-24 md:columns-2 md:pb-4 *:mb-4 *:min-w-0 *:break-inside-avoid">
                 <SettingAPIKey key="setting-apikey" />
+                <SettingIntegrationToken key="setting-integration-token" />
                 <SettingInfo key="setting-info" />
                 <SettingAppearance key="setting-appearance" />
                 <SettingNetwork key="setting-network" />

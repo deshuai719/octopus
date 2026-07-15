@@ -401,21 +401,34 @@ func syncAllSiteAccounts(c *gin.Context) {
 	resp.Success(c, nil)
 }
 
+type siteRatioChangeRequest struct {
+	SiteURL   string   `json:"site_url" binding:"required"`
+	Platform  string   `json:"platform"`
+	Groups    []string `json:"groups"`
+	ChangedAt string   `json:"changed_at"`
+}
+
 func handleSiteRatioChange(c *gin.Context) {
-	var request struct {
-		SiteURL   string   `json:"site_url" binding:"required"`
-		Platform  string   `json:"platform"`
-		Groups    []string `json:"groups"`
-		ChangedAt string   `json:"changed_at"`
-	}
+	var request siteRatioChangeRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		resp.InvalidJSON(c)
 		return
 	}
-	accountIDs, err := op.SiteAccountIDsForRateSignal(c.Request.Context(), request.SiteURL, request.Platform)
+	matched, err := processSiteRatioChange(c.Request.Context(), request)
 	if err != nil {
 		resp.Error(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	resp.Success(c, gin.H{
+		"matched_accounts": matched,
+		"groups":           request.Groups,
+	})
+}
+
+func processSiteRatioChange(ctx context.Context, request siteRatioChangeRequest) (int, error) {
+	accountIDs, err := op.SiteAccountIDsForRateSignal(ctx, request.SiteURL, request.Platform)
+	if err != nil {
+		return 0, err
 	}
 	if len(accountIDs) > 0 {
 		ids := append([]int(nil), accountIDs...)
@@ -425,10 +438,7 @@ func handleSiteRatioChange(c *gin.Context) {
 			sitesvc.SyncAccountsWithOptions(ctx, ids, sitesync.SiteBatchOptions{Trigger: sitesync.SiteBatchTriggerManual})
 		})
 	}
-	resp.Success(c, gin.H{
-		"matched_accounts": len(accountIDs),
-		"groups":           request.Groups,
-	})
+	return len(accountIDs), nil
 }
 
 func checkinAllSiteAccounts(c *gin.Context) {
