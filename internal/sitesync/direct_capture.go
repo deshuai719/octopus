@@ -223,7 +223,8 @@ func probeDirectCaptureProfileWithClient(ctx context.Context, origin string, pla
 			continue
 		}
 		if len(body) > 64*1024 {
-			return directCaptureProfile{}, directCaptureValidationError("direct_capture.upstream.too_large", "upstream validation response is too large", false, "manual_add")
+			lastErr = directCaptureValidationError("direct_capture.upstream.too_large", "upstream validation response is too large", false, "manual_add")
+			continue
 		}
 		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
 			lastErr = directCaptureValidationError("direct_capture.auth.invalid", "candidate authentication failed", false, "login_again")

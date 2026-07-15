@@ -158,6 +158,47 @@ func TestProbeDirectCaptureProfileRequiresAuthenticatedResponse(t *testing.T) {
 	}
 }
 
+func TestProbeDirectCaptureProfileContinuesAfterOversizedEndpoint(t *testing.T) {
+	var selfRequests atomic.Int32
+	var tokenRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/user/self":
+			selfRequests.Add(1)
+			_, _ = w.Write([]byte(`{"success":true,"data":{"padding":"` + strings.Repeat("x", 64*1024) + `"}}`))
+		case "/api/user/token":
+			tokenRequests.Add(1)
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":719,"username":"tester"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	profile, err := probeDirectCaptureProfileWithClient(
+		context.Background(),
+		server.URL,
+		model.SitePlatformDoneHub,
+		"candidate-token",
+		nil,
+		[]string{"/api/user/self", "/api/user/token"},
+		server.Client(),
+	)
+	if err != nil {
+		t.Fatalf("probeDirectCaptureProfileWithClient() error = %v", err)
+	}
+	if profile.Path != "/api/user/token" {
+		t.Fatalf("profile path = %q, want fallback /api/user/token", profile.Path)
+	}
+	if got := selfRequests.Load(); got != 1 {
+		t.Fatalf("self requests = %d, want 1", got)
+	}
+	if got := tokenRequests.Load(); got != 1 {
+		t.Fatalf("token requests = %d, want 1", got)
+	}
+}
+
 func TestValidateDirectCaptureEvidenceRequiresStrongOrTwoMediumSignals(t *testing.T) {
 	tests := []struct {
 		name     string
