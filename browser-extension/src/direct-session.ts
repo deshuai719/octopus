@@ -1,7 +1,7 @@
-import type { DirectCaptureView, Platform, PlatformEvidence } from "./types";
+import type { DirectCaptureSummaryItem, DirectCaptureView, Platform, PlatformEvidence } from "./types";
 
-const DIRECT_CAPTURE_INDEX_KEY = "octopusDirectCaptureIndexV1";
-const REMOVABLE_DIRECT_PHASES = new Set(["canceled", "failed", "conflict", "expired"]);
+export const DIRECT_CAPTURE_INDEX_KEY = "octopusDirectCaptureIndexV1";
+const ACTIVE_DIRECT_PHASES = new Set(["credential_generation", "resolution_required", "preview_ready", "confirming", "saved_syncing"]);
 
 export type DirectSessionIndexItem = {
   origin: string;
@@ -15,6 +15,9 @@ export type DirectSessionIndexItem = {
   expires_at: string;
   generation_attempted: boolean;
   capture?: DirectCaptureView;
+  created_at?: string;
+  updated_at?: string;
+  sync_started_at?: string;
 };
 
 async function readIndex(): Promise<Record<string, DirectSessionIndexItem>> {
@@ -37,8 +40,50 @@ export async function getDirectSession(origin: string): Promise<DirectSessionInd
 
 export async function putDirectSession(item: DirectSessionIndexItem): Promise<void> {
   const index = await readIndex();
-  index[item.origin] = item;
+  const previous = index[item.origin];
+  const now = new Date().toISOString();
+  index[item.origin] = {
+    ...item,
+    created_at: previous?.created_at ?? item.created_at ?? now,
+    updated_at: now,
+    sync_started_at: item.sync_started_at ?? previous?.sync_started_at ?? (item.phase === "saved_syncing" ? now : undefined),
+  };
   await writeIndex(index);
+}
+
+export async function listDirectSessions(): Promise<DirectSessionIndexItem[]> {
+  return Object.values(await readIndex());
+}
+
+export function directCaptureNeedsRefresh(phase: string): boolean {
+  return phase === "saved_syncing";
+}
+
+export function directCaptureIsActive(phase: string): boolean {
+  return ACTIVE_DIRECT_PHASES.has(phase);
+}
+
+export async function getDirectCaptureSummary(limit = 20): Promise<DirectCaptureSummaryItem[]> {
+  const items = await listDirectSessions();
+  return items
+    .sort((a, b) => Number(directCaptureIsActive(b.phase)) - Number(directCaptureIsActive(a.phase)) || Date.parse(b.updated_at ?? b.created_at ?? "") - Date.parse(a.updated_at ?? a.created_at ?? ""))
+    .slice(0, limit)
+    .map((item) => ({
+      origin: item.origin,
+      capture_id: item.capture_id,
+      site_name: item.capture?.site_name,
+      phase: item.phase,
+      saved: Boolean(item.capture?.saved) || ["saved_syncing", "sync_failed", "completed"].includes(item.phase),
+      created_at: item.created_at ?? item.updated_at ?? new Date().toISOString(),
+      updated_at: item.updated_at ?? item.created_at ?? new Date().toISOString(),
+      sync_started_at: item.sync_started_at,
+      expires_at: item.expires_at,
+      can_retry_sync: item.phase === "sync_failed",
+      can_clear: !directCaptureIsActive(item.phase),
+      error_code: item.capture?.error_code,
+      error_message: item.capture?.error_message,
+      sync_result: item.capture?.sync_result,
+    }));
 }
 
 export async function removeDirectSession(origin: string): Promise<void> {
@@ -48,7 +93,8 @@ export async function removeDirectSession(origin: string): Promise<void> {
 }
 
 export function shouldRemoveDirectSession(phase: string): boolean {
-  return REMOVABLE_DIRECT_PHASES.has(phase);
+  void phase;
+  return false;
 }
 
 export async function claimDirectTokenGeneration(origin: string, operationID: string): Promise<boolean> {

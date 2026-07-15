@@ -43,6 +43,7 @@ func TestConfirmDirectCaptureCreatesSiteAndFirstAccountAtomically(t *testing.T) 
 	result, err := ConfirmDirectCapture(ctx, DirectCapturePersistInput{
 		Match: *match, CanonicalOrigin: identity.CanonicalOrigin, Platform: identity.Platform,
 		SiteName: "New Site", AccountName: "Admin", AccessToken: "ephemeral-test-token", PlatformUserID: identity.PlatformUserID,
+		AddTags: []string{model.SiteTagPublic, "imported"},
 	})
 	if err != nil {
 		t.Fatalf("ConfirmDirectCapture() error = %v", err)
@@ -57,9 +58,39 @@ func TestConfirmDirectCaptureCreatesSiteAndFirstAccountAtomically(t *testing.T) 
 	if site.CanonicalOrigin == nil || *site.CanonicalOrigin != identity.CanonicalOrigin || len(site.Accounts) != 1 {
 		t.Fatalf("created site = %#v", site)
 	}
+	if strings.Join(site.Tags, ",") != model.SiteTagPublic+",imported" {
+		t.Fatalf("created site tags = %#v", site.Tags)
+	}
 	account := site.Accounts[0]
 	if account.AccessToken != "ephemeral-test-token" || account.PlatformUserID == nil || *account.PlatformUserID != 42 || !account.AutoSync {
 		t.Fatalf("created account = %#v", account)
+	}
+}
+
+func TestConfirmDirectCaptureMergesLatestSiteTagsAndSwitchesBillingTag(t *testing.T) {
+	ctx := setupSiteOpTestDB(t)
+	site := createDirectCaptureSite(t, ctx, "https://tags.example")
+	identity := DirectCaptureIdentity{CanonicalOrigin: "https://tags.example", Platform: model.SitePlatformNewAPI}
+	match, err := MatchDirectCapture(ctx, identity, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site.Tags = []string{model.SiteTagPublic, "existing", "concurrent"}
+	if err := dbpkg.GetDB().WithContext(ctx).Save(site).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ConfirmDirectCapture(ctx, DirectCapturePersistInput{
+		Match: *match, CanonicalOrigin: identity.CanonicalOrigin, Platform: identity.Platform,
+		AccountName: "Admin", AccessToken: "ephemeral-test-token", AddTags: []string{"new", model.SiteTagPaid},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := SiteGet(site.ID, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(reloaded.Tags, ",") != model.SiteTagPaid+",existing,concurrent,new" {
+		t.Fatalf("merged site tags = %#v", reloaded.Tags)
 	}
 }
 

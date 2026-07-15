@@ -50,9 +50,10 @@ type DirectCaptureResolveRequest struct {
 }
 
 type DirectCaptureConfirmRequest struct {
-	PreviewVersion string `json:"preview_version"`
-	SiteName       string `json:"site_name,omitempty"`
-	AccountName    string `json:"account_name,omitempty"`
+	PreviewVersion string   `json:"preview_version"`
+	SiteName       string   `json:"site_name,omitempty"`
+	AccountName    string   `json:"account_name,omitempty"`
+	AddTags        []string `json:"add_tags,omitempty"`
 }
 
 type DirectCaptureCandidateView struct {
@@ -83,6 +84,7 @@ type DirectCaptureView struct {
 	AccountEnabled      bool                            `json:"account_enabled"`
 	CredentialMigration bool                            `json:"credential_migration"`
 	AccountOptions      []op.DirectCaptureAccountOption `json:"account_options,omitempty"`
+	SiteTags            []string                        `json:"site_tags,omitempty"`
 	Candidate           *DirectCaptureCandidateView     `json:"candidate,omitempty"`
 	Saved               *op.DirectCapturePersistResult  `json:"saved,omitempty"`
 	SyncResult          *model.SiteSyncResult           `json:"sync_result,omitempty"`
@@ -251,6 +253,7 @@ func ConfirmDirectCapture(ctx context.Context, captureID string, request DirectC
 		Match: match, CanonicalOrigin: validated.Origin, Platform: validated.Platform,
 		SiteName: firstDirectCaptureName(request.SiteName, match.SiteName), AccountName: accountName,
 		AccessToken: validated.AccessToken, RefreshToken: validated.RefreshToken, TokenExpiresAt: validated.TokenExpiresAt, PlatformUserID: validated.PlatformUserID,
+		AddTags: request.AddTags,
 	})
 	if err != nil {
 		directCaptures.mu.Lock()
@@ -472,6 +475,7 @@ func directCaptureView(session *directCaptureSession) DirectCaptureView {
 		view.AccountEnabled = session.Match.AccountEnabled
 		view.CredentialMigration = session.Match.CredentialMigration
 		view.AccountOptions = append([]op.DirectCaptureAccountOption(nil), session.Match.AccountOptions...)
+		view.SiteTags = append([]string(nil), session.Match.SiteTags...)
 	}
 	return view
 }

@@ -37,11 +37,13 @@ export type WorkerRequest =
   | { type: "confirm_binding_replacement" }
   | { type: "generate_direct_token"; origin: string }
   | { type: "submit_direct_token"; origin: string; access_token: string }
-  | { type: "confirm_direct_capture"; origin: string; capture_id: string; preview_version: string; site_name?: string; account_name?: string }
+  | { type: "confirm_direct_capture"; origin: string; capture_id: string; preview_version: string; site_name?: string; account_name?: string; add_tags?: string[] }
   | { type: "resolve_direct_capture"; origin: string; capture_id: string; account_id?: number; create_new?: boolean }
   | { type: "cancel_direct_capture"; origin: string; capture_id: string }
   | { type: "retry_direct_sync"; origin: string; capture_id: string }
   | { type: "clear_direct_session"; origin: string }
+  | { type: "get_direct_capture_summary"; refresh_active?: boolean }
+  | { type: "open_direct_capture_origin"; origin: string }
   | { type: "clear_diagnostics" };
 
 export type WorkerResponse = {
@@ -49,6 +51,7 @@ export type WorkerResponse = {
   result?: ExtractResult;
   binding?: Omit<OctopusBinding, "token">;
   capture?: DirectCaptureView;
+  summary?: DirectCaptureSummaryItem[];
   origin?: string;
   mode?: "binding" | "direct" | "unsupported";
   message?: string;
@@ -99,6 +102,7 @@ export type DirectCaptureView = {
   account_id?: number;
   account_name?: string;
   account_enabled?: boolean;
+  site_tags?: string[];
   credential_migration?: boolean;
   account_options?: Array<{
     id: number;
@@ -120,4 +124,21 @@ export type DirectCaptureView = {
   sync_result?: { status: string; message: string };
   error_code?: string;
   error_message?: string;
+};
+
+export type DirectCaptureSummaryItem = {
+  origin: string;
+  capture_id?: string;
+  site_name?: string;
+  phase: string;
+  saved: boolean;
+  created_at: string;
+  updated_at: string;
+  sync_started_at?: string;
+  expires_at: string;
+  can_retry_sync: boolean;
+  can_clear: boolean;
+  error_code?: string;
+  error_message?: string;
+  sync_result?: { status: string; message: string };
 };

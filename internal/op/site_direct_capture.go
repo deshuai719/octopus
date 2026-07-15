@@ -49,6 +49,7 @@ type DirectCaptureMatch struct {
 	CredentialMigration bool                         `json:"credential_migration"`
 	ResolutionRequired  bool                         `json:"resolution_required"`
 	AccountOptions      []DirectCaptureAccountOption `json:"account_options,omitempty"`
+	SiteTags            []string                     `json:"site_tags,omitempty"`
 	SiteVersion         string                       `json:"-"`
 	AccountVersion      string                       `json:"-"`
 }
@@ -63,6 +64,7 @@ type DirectCapturePersistInput struct {
 	RefreshToken    string
 	TokenExpiresAt  int64
 	PlatformUserID  *int
+	AddTags         []string
 }
 
 type DirectCapturePersistResult struct {
@@ -97,6 +99,7 @@ func MatchDirectCapture(ctx context.Context, identity DirectCaptureIdentity, sel
 		SiteEnabled:  site.Enabled,
 		SiteVersion:  directCaptureSiteVersion(&site),
 		AccountName:  "默认账号",
+		SiteTags:     append([]string(nil), site.Tags...),
 	}
 	management := make([]model.SiteAccount, 0, len(site.Accounts))
 	for _, account := range site.Accounts {
@@ -162,6 +165,10 @@ func ConfirmDirectCapture(ctx context.Context, input DirectCapturePersistInput) 
 		return nil, err
 	}
 	input.AccountName = accountName
+	input.AddTags = model.NormalizeSiteTags(input.AddTags)
+	if err := model.ValidateSiteTags(input.AddTags); err != nil {
+		return nil, err
+	}
 
 	var result DirectCapturePersistResult
 	err = db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -184,6 +191,7 @@ func ConfirmDirectCapture(ctx context.Context, input DirectCapturePersistInput) 
 				ProxyMode:        model.ProxyUsageModeDirect,
 				GlobalWeight:     1,
 				DefaultRouteType: model.SiteModelRouteTypeOpenAIChat,
+				Tags:             append([]string(nil), input.AddTags...),
 			}
 			if err := site.Validate(); err != nil {
 				return err
@@ -208,6 +216,15 @@ func ConfirmDirectCapture(ctx context.Context, input DirectCapturePersistInput) 
 			}
 			if site.Archived {
 				if err := tx.Model(&model.Site{}).Where("id = ?", site.ID).Updates(map[string]any{"archived": false, "archived_at": nil}).Error; err != nil {
+					return err
+				}
+			}
+			if len(input.AddTags) > 0 {
+				merged := model.NormalizeSiteTags(append(append([]string(nil), site.Tags...), input.AddTags...))
+				if err := model.ValidateSiteTags(merged); err != nil {
+					return err
+				}
+				if err := tx.Model(&model.Site{}).Where("id = ?", site.ID).Select("tags").Updates(&model.Site{Tags: merged}).Error; err != nil {
 					return err
 				}
 			}

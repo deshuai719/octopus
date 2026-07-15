@@ -4,7 +4,7 @@ import { clearDiagnostics, formatDiagnostics, listDiagnostics } from "./diagnost
 import { readingView, submittingView, waitingView } from "./panel-state";
 import type { PanelPrimaryAction, PanelView } from "./panel-state";
 import { captureActionLabel, captureReceiptFor, transferProgressForPhase } from "./capture-progress";
-import type { DirectCaptureView, SessionEvent, WorkerRequest, WorkerResponse } from "./types";
+import type { DirectCaptureSummaryItem, DirectCaptureView, SessionEvent, WorkerRequest, WorkerResponse } from "./types";
 
 const status = document.querySelector<HTMLElement>("#status")!;
 const detail = document.querySelector<HTMLElement>("#detail")!;
@@ -46,11 +46,22 @@ const captureWarning = document.querySelector<HTMLElement>("#capture-warning")!;
 const manualTokenField = document.querySelector<HTMLElement>("#manual-token-field")!;
 const manualTokenInput = document.querySelector<HTMLInputElement>("#manual-token")!;
 const manualTokenButton = document.querySelector<HTMLButtonElement>("#manual-token-action")!;
+const siteTagsField = document.querySelector<HTMLElement>("#site-tags-field")!;
+const siteBillingTag = document.querySelector<HTMLSelectElement>("#site-billing-tag")!;
+const siteCustomTags = document.querySelector<HTMLInputElement>("#site-custom-tags")!;
+const siteExistingTags = document.querySelector<HTMLElement>("#site-existing-tags")!;
+const summaryCounts = document.querySelector<HTMLElement>("#summary-counts")!;
+const summaryList = document.querySelector<HTMLElement>("#summary-list")!;
+const refreshSummaryButton = document.querySelector<HTMLButtonElement>("#refresh-summary")!;
 
 let currentCapture: DirectCaptureView | undefined;
 let currentOrigin: string | undefined;
 let primaryAction: PanelPrimaryAction = "capture";
 let capturePageOrigin: string | undefined;
+let summaryTimer: ReturnType<typeof setTimeout> | undefined;
+let summaryGeneration = 0;
+let summaryActiveSince = 0;
+let storageRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 
 function send(request: WorkerRequest) {
   return chrome.runtime.sendMessage<WorkerRequest, WorkerResponse>(request);
@@ -145,6 +156,10 @@ function clearDirectPreview(): void {
   manualTokenInput.value = "";
   manualTokenField.hidden = true;
   manualTokenButton.hidden = true;
+  siteTagsField.hidden = true;
+  siteBillingTag.value = "公益";
+  siteCustomTags.value = "";
+  siteExistingTags.textContent = "";
 }
 
 function showManualTokenInput(): void {
@@ -169,6 +184,11 @@ function renderCapture(capture: DirectCaptureView): void {
   matchedAccountRow.hidden = !(capture.account_name || capture.candidate?.identity_label);
   siteNameField.hidden = capture.action !== "create_site_account";
   accountNameField.hidden = !["create_site_account", "create_account", "update_account"].includes(capture.action ?? "");
+  siteTagsField.hidden = capture.phase !== "preview_ready";
+  const existingTags = capture.site_tags ?? [];
+  siteBillingTag.value = existingTags.includes("付费") ? "付费" : "公益";
+  siteCustomTags.value = "";
+  siteExistingTags.textContent = existingTags.length > 0 ? `已有标签将保留：${existingTags.join("、")}` : "新站点或未分类站点默认补充“公益”。";
   accountResolutionField.hidden = capture.phase !== "resolution_required";
   accountResolution.replaceChildren(...(capture.account_options ?? []).map((account) => {
     const option = document.createElement("option");
@@ -219,6 +239,85 @@ function renderCapture(capture: DirectCaptureView): void {
   }
 }
 
+function summaryPhaseLabel(phase: string): string {
+  return ({ saved_syncing: "同步中", completed: "成功", sync_failed: "失败", preview_ready: "待确认", resolution_required: "待选择", credential_generation: "待令牌", confirming: "保存中", failed: "失败", conflict: "冲突", canceled: "已取消", expired: "已过期" } as Record<string, string>)[phase] ?? phase;
+}
+
+function renderSummary(items: DirectCaptureSummaryItem[]): void {
+  const syncing = items.filter((item) => item.phase === "saved_syncing").length;
+  const completed = items.filter((item) => item.phase === "completed").length;
+  const failed = items.filter((item) => ["sync_failed", "failed", "conflict"].includes(item.phase)).length;
+  summaryCounts.textContent = items.length === 0 ? "暂无记录" : `${items.length} 项 · ${syncing} 同步中 · ${completed} 成功 · ${failed} 失败`;
+  if (items.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "summary-empty";
+    empty.textContent = "本次浏览器会话还没有导入记录。";
+    summaryList.replaceChildren(empty);
+    return;
+  }
+  summaryList.replaceChildren(...items.map((item) => {
+    const card = document.createElement("article");
+    card.className = "summary-item";
+    card.dataset.phase = item.phase;
+    card.dataset.current = String(item.origin === currentOrigin);
+    const head = document.createElement("div");
+    head.className = "summary-item-head";
+    const link = document.createElement("button");
+    link.className = "summary-origin";
+    link.textContent = item.site_name ? `${item.site_name} · ${item.origin}` : item.origin;
+    link.addEventListener("click", () => { void send({ type: "open_direct_capture_origin", origin: item.origin }); });
+    const badge = document.createElement("span");
+    badge.className = "summary-badge";
+    badge.textContent = summaryPhaseLabel(item.phase);
+    head.append(link, badge);
+    const meta = document.createElement("p");
+    meta.className = "summary-meta";
+    const elapsed = Math.max(0, Math.floor((Date.now() - Date.parse(item.sync_started_at ?? item.created_at)) / 1000));
+    meta.textContent = `${item.saved ? "账号已保存" : "尚未保存"} · ${elapsed}s${item.sync_result?.message ? ` · ${item.sync_result.message}` : item.error_message ? ` · ${item.error_message}` : ""}`;
+    const actions = document.createElement("div");
+    actions.className = "summary-actions";
+    if (item.can_retry_sync && item.capture_id) {
+      const retry = document.createElement("button");
+      retry.className = "secondary";
+      retry.textContent = "重试同步";
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        await send({ type: "retry_direct_sync", origin: item.origin, capture_id: item.capture_id! });
+        await refreshSummary(true);
+      });
+      actions.append(retry);
+    }
+    if (item.can_clear) {
+      const clear = document.createElement("button");
+      clear.className = "quiet";
+      clear.textContent = "清理";
+      clear.addEventListener("click", async () => {
+        await send({ type: "clear_direct_session", origin: item.origin });
+        await refreshSummary(false);
+      });
+      actions.append(clear);
+    }
+    card.append(head, meta, actions);
+    return card;
+  }));
+}
+
+async function refreshSummary(refreshActive = true): Promise<void> {
+  const generation = ++summaryGeneration;
+  const response = await send({ type: "get_direct_capture_summary", refresh_active: refreshActive });
+  if (generation !== summaryGeneration || !response.ok) return;
+  const items = response.summary ?? [];
+  renderSummary(items);
+  if (summaryTimer) clearTimeout(summaryTimer);
+  if (items.some((item) => item.phase === "saved_syncing")) {
+    if (summaryActiveSince === 0) summaryActiveSince = Date.now();
+    summaryTimer = setTimeout(() => { void refreshSummary(true); }, Date.now() - summaryActiveSince < 20_000 ? 2_000 : 5_000);
+  } else {
+    summaryActiveSince = 0;
+    summaryTimer = undefined;
+  }
+}
+
 function clearContextDisplay(): void {
   clearDirectPreview();
   endpoints.hidden = true;
@@ -262,6 +361,7 @@ function renderActiveContextResponse(response: WorkerResponse): void {
 async function refreshActiveContext(): Promise<void> {
   await refreshCapturePageOrigin();
   renderActiveContextResponse(await send({ type: "get_active_context", origin: capturePageOrigin }));
+  void refreshSummary(false);
 }
 
 async function captureActiveSession(): Promise<void> {
@@ -300,7 +400,8 @@ async function runPrimaryAction(): Promise<void> {
     renderTransferProgress("saving");
     clearTransferReceipt();
     renderView({ status: "正在保存账号", detail: "正在确认写入 Octopus；完成前请勿重复点击。", primaryAction: null, primaryLabel: "正在保存", primaryDisabled: true });
-    const response = await send({ type: "confirm_direct_capture", origin: currentOrigin, capture_id: currentCapture.capture_id, preview_version: currentCapture.preview_version ?? "", site_name: siteNameInput.value.trim() || undefined, account_name: accountNameInput.value.trim() || undefined });
+    const customTags = siteCustomTags.value.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean);
+    const response = await send({ type: "confirm_direct_capture", origin: currentOrigin, capture_id: currentCapture.capture_id, preview_version: currentCapture.preview_version ?? "", site_name: siteNameInput.value.trim() || undefined, account_name: accountNameInput.value.trim() || undefined, add_tags: [siteBillingTag.value, ...customTags] });
     if (response.capture) renderCapture(response.capture);
     else {
       renderTransferProgress("save_failed");
@@ -332,7 +433,7 @@ secondaryButton.addEventListener("click", () => {
 
 discardButton.addEventListener("click", async () => {
   if (currentCapture && currentOrigin) {
-    if (["completed", "canceled", "failed", "conflict", "expired"].includes(currentCapture.phase)) {
+    if (["completed", "sync_failed", "canceled", "failed", "conflict", "expired"].includes(currentCapture.phase)) {
       await send({ type: "clear_direct_session", origin: currentOrigin });
       clearContextDisplay();
       renderView(waitingView("当前站点的临时导入状态已清理，Octopus 绑定保持不变。"));
@@ -359,7 +460,10 @@ chrome.runtime.onMessage.addListener((event: SessionEvent) => {
   } else if (event.type === "direct_capture_progress" && event.origin === currentOrigin) {
     renderTransferProgress(event.phase);
     renderView({ status: "站点已识别", detail: "正在提取允许的登录信息并向 Octopus 发送脱敏预览。", primaryAction: null, primaryLabel: "正在送达预览", primaryDisabled: true });
-  } else if (event.type === "direct_capture_updated" && event.origin === currentOrigin) renderCapture(event.capture);
+  } else if (event.type === "direct_capture_updated") {
+    if (event.origin === currentOrigin) renderCapture(event.capture);
+    void refreshSummary(false);
+  }
   else if (event.type === "direct_capture_manual_required" && event.origin === currentOrigin) {
     renderView({ status: "需要系统令牌", detail: event.message, primaryAction: "generate_direct", primaryLabel: "生成系统令牌并继续", primaryDisabled: false });
     showManualTokenInput();
@@ -398,6 +502,14 @@ clearDiagnosticsButton.addEventListener("click", async () => {
   renderView(waitingView("脱敏诊断记录已清空。"));
 });
 
+refreshSummaryButton.addEventListener("click", () => { void refreshSummary(true); });
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "session" || !("octopusDirectCaptureIndexV1" in changes)) return;
+  if (storageRefreshTimer) clearTimeout(storageRefreshTimer);
+  storageRefreshTimer = setTimeout(() => { void refreshSummary(false); }, 100);
+});
+
 chrome.tabs.onActivated.addListener(() => { void refreshActiveContext(); });
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   if (tab.active && changeInfo.url) void refreshActiveContext();
@@ -405,3 +517,4 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 
 renderView(readingView());
 void refreshActiveContext();
+void refreshSummary(true);

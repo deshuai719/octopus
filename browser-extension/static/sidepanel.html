@@ -66,6 +66,15 @@
               <span>账号名称</span>
               <input id="account-name" maxlength="128" autocomplete="off" />
             </label>
+            <div id="site-tags-field" class="field" hidden>
+              <span>站点标签（只补充，不删除已有标签）</span>
+              <select id="site-billing-tag">
+                <option value="公益">公益</option>
+                <option value="付费">付费</option>
+              </select>
+              <input id="site-custom-tags" maxlength="660" autocomplete="off" placeholder="其他标签，用逗号分隔" />
+              <small id="site-existing-tags" class="field-hint"></small>
+            </div>
             <label id="account-resolution-field" class="field" hidden>
               <span>选择已有管理账号</span>
               <select id="account-resolution"></select>
@@ -87,6 +96,14 @@
             </section>
           </div>
         </div>
+      </section>
+
+      <section id="import-summary" class="import-summary" aria-live="polite">
+        <div class="summary-heading">
+          <div><p class="section-label">当前会话导入摘要</p><strong id="summary-counts">暂无记录</strong></div>
+          <button id="refresh-summary" class="quiet summary-refresh">刷新</button>
+        </div>
+        <div id="summary-list" class="summary-list"></div>
       </section>
 
       <div class="actions">

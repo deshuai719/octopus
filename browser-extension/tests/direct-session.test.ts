@@ -4,6 +4,7 @@ import {
   claimDirectTokenGeneration,
   clearAllDirectSessions,
   getDirectSession,
+  getDirectCaptureSummary,
   shouldRemoveDirectSession,
   putDirectSession,
   removeDirectSession,
@@ -68,11 +69,25 @@ describe("direct capture session index", () => {
     expect(await getDirectSession("https://active.example")).toBeUndefined();
   });
 
-  it("keeps retryable and completed results but removes unusable terminal phases", () => {
-    expect(shouldRemoveDirectSession("sync_failed")).toBe(false);
-    expect(shouldRemoveDirectSession("completed")).toBe(false);
-    for (const phase of ["canceled", "failed", "conflict", "expired"]) {
-      expect(shouldRemoveDirectSession(phase)).toBe(true);
+  it("keeps terminal results until their session TTL expires", () => {
+    for (const phase of ["sync_failed", "completed", "canceled", "failed", "conflict", "expired"]) {
+      expect(shouldRemoveDirectSession(phase)).toBe(false);
     }
+  });
+
+  it("preserves creation time, tracks sync start, and limits the safe summary", async () => {
+    installSessionStorage();
+    const expires = new Date(Date.now() + 60_000).toISOString();
+    await putDirectSession({ origin: "https://active.example", operation_id: "active", capture_id: "capture-active", phase: "preview_ready", expires_at: expires, generation_attempted: false });
+    const createdAt = (await getDirectSession("https://active.example"))?.created_at;
+    await putDirectSession({ origin: "https://active.example", operation_id: "active", capture_id: "capture-active", phase: "saved_syncing", expires_at: expires, generation_attempted: false, capture: { capture_id: "capture-active", operation_id: "active", origin: "https://active.example", platform: "new-api", phase: "saved_syncing", expires_at: expires, saved: { action: "create_account", site_id: 1, account_id: 2 } } });
+    expect((await getDirectSession("https://active.example"))?.created_at).toBe(createdAt);
+    expect((await getDirectSession("https://active.example"))?.sync_started_at).toBeTruthy();
+    for (let index = 0; index < 21; index += 1) {
+      await putDirectSession({ origin: `https://done-${index}.example`, operation_id: `done-${index}`, phase: "completed", expires_at: expires, generation_attempted: false });
+    }
+    const summary = await getDirectCaptureSummary();
+    expect(summary).toHaveLength(20);
+    expect(summary[0]).toMatchObject({ origin: "https://active.example", phase: "saved_syncing", saved: true });
   });
 });

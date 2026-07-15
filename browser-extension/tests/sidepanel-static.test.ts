@@ -46,6 +46,16 @@ describe("side panel visibility contract", () => {
     expect(sidepanelScript).toContain("账号和凭据尚未写入");
   });
 
+  it("renders session-scoped import summaries and additive site tags", () => {
+    for (const field of ["import-summary", "summary-counts", "summary-list", "site-billing-tag", "site-custom-tags", "site-existing-tags"]) {
+      expect(sidepanelHTML).toContain(`id="${field}"`);
+    }
+    expect(sidepanelScript).toContain('type: "get_direct_capture_summary"');
+    expect(sidepanelScript).toContain('type: "open_direct_capture_origin"');
+    expect(sidepanelScript).toContain('add_tags: [siteBillingTag.value, ...customTags]');
+    expect(sidepanelScript).toContain('areaName !== "session"');
+  });
+
   it("keeps validation failures on the real progress instead of a decorative rail", () => {
     expect(sidepanelHTML).toContain('<div class="rail" aria-hidden="true"></div>');
     expect(sidepanelHTML).not.toMatch(/class="rail"[^>]*>\s*<span/s);

@@ -15,7 +15,10 @@ import { recordDiagnostic, sanitizeDiagnosticMessage, clearDiagnostics } from ".
 import {
   claimDirectTokenGeneration,
   clearAllDirectSessions,
+  directCaptureNeedsRefresh,
+  getDirectCaptureSummary,
   getDirectSession,
+  listDirectSessions,
   putDirectSession,
   removeDirectSession,
   shouldRemoveDirectSession,
@@ -37,6 +40,25 @@ let pendingReplacement: OctopusBinding | undefined;
 const PENDING_REPLACEMENT_ORIGIN_KEY = "octopusPendingReplacementOriginV1";
 const PENDING_REPLACEMENT_EXPIRY_ALARM = "octopus-pending-replacement-expiry";
 const DIRECT_PERMISSION_ALARM_PREFIX = "octopus-direct-permission:";
+
+async function refreshDirectCaptureSummary(): Promise<void> {
+  const binding = await getOctopusBinding();
+  if (!binding) return;
+  const active = (await listDirectSessions()).filter((item) => item.capture_id && directCaptureNeedsRefresh(item.phase));
+  for (let offset = 0; offset < active.length; offset += 4) {
+    await Promise.all(active.slice(offset, offset + 4).map(async (indexed) => {
+      try {
+        const capture = await octopusAPI<DirectCaptureView>(binding, `/api/v1/site/direct-capture/${encodeURIComponent(indexed.capture_id!)}`, indexed.operation_id);
+        await putDirectSession({ ...indexed, phase: capture.phase, expires_at: capture.expires_at, capture });
+        if (["completed", "sync_failed", "canceled", "failed", "conflict", "expired"].includes(capture.phase)) {
+          await revokeDirectPermission(indexed.origin);
+        }
+      } catch {
+        // Keep the last known safe state; the panel can retry on its next bounded refresh.
+      }
+    }));
+  }
+}
 
 void clearLegacyRecoveryState().catch(async (error: unknown) => {
   const message = sanitizeDiagnosticMessage(error);
@@ -310,6 +332,27 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, _sender, sendRespo
         sendResponse({ ok: true, mode: "unsupported", origin, message: binding ? "请在已登录的受支持中转站页面点击扩展" : "请先在已登录 Octopus 页面点击扩展完成初始化" });
         return;
       }
+      if (request.type === "get_direct_capture_summary") {
+        if (request.refresh_active) await refreshDirectCaptureSummary();
+        sendResponse({ ok: true, mode: "direct", summary: await getDirectCaptureSummary() });
+        return;
+      }
+      if (request.type === "open_direct_capture_origin") {
+        const canonical = canonicalHTTPOrigin(request.origin);
+        if (!canonical || canonical !== request.origin || !(await getDirectSession(canonical))) {
+          throw new Error("站点链接不属于当前导入摘要");
+        }
+        const tabs = await chrome.tabs.query({});
+        const existing = tabs.find((tab) => canonicalHTTPOrigin(tab.url) === canonical);
+        if (existing?.id) {
+          await chrome.tabs.update(existing.id, { active: true });
+          if (existing.windowId !== undefined) await chrome.windows.update(existing.windowId, { focused: true });
+        } else {
+          await chrome.tabs.create({ url: canonical });
+        }
+        sendResponse({ ok: true, mode: "direct", origin: canonical });
+        return;
+      }
       if (request.type === "confirm_binding_replacement") {
         if (!pendingReplacement) throw new Error("没有等待确认的 Octopus 换绑");
         const current = await getOctopusBinding();
@@ -365,11 +408,13 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, _sender, sendRespo
         const indexed = await getDirectSession(request.origin);
         const binding = await getOctopusBinding();
         if (!indexed || !binding) throw new Error("直接捕获会话或 Octopus 绑定不存在");
+        if (indexed.capture_id && indexed.capture_id !== request.capture_id) throw new Error("直接捕获会话已经变化，请刷新后重试");
+        if (request.type === "retry_direct_sync" && indexed.phase !== "sync_failed") throw new Error("当前导入状态不允许重试同步");
         let path: string;
         let body: Record<string, unknown>;
         if (request.type === "confirm_direct_capture") {
           path = `/api/v1/site/direct-capture/${encodeURIComponent(request.capture_id)}/confirm`;
-          body = { preview_version: request.preview_version, site_name: request.site_name, account_name: request.account_name };
+          body = { preview_version: request.preview_version, site_name: request.site_name, account_name: request.account_name, add_tags: request.add_tags };
         } else if (request.type === "resolve_direct_capture") {
           path = `/api/v1/site/direct-capture/${encodeURIComponent(request.capture_id)}/resolve`;
           body = { account_id: request.account_id, create_new: request.create_new === true };
