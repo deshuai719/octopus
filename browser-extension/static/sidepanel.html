@@ -11,7 +11,7 @@
       <header class="masthead">
         <div class="mark" aria-hidden="true">O</div>
         <div>
-          <p class="eyebrow">AUTH RECOVERY PASS</p>
+          <p class="eyebrow">DIRECT IMPORT PASS</p>
           <h1>Octopus 登录助手</h1>
         </div>
       </header>
@@ -19,8 +19,8 @@
       <section class="passport" aria-live="polite">
         <div class="rail" aria-hidden="true"><span></span><span></span><span></span></div>
         <div class="passport-body">
-          <p id="status" class="status">正在读取会话</p>
-          <p id="detail" class="detail">请保持 Octopus 恢复弹窗打开。</p>
+          <p id="status" class="status">正在读取当前页面</p>
+          <p id="detail" class="detail">正在识别 Octopus 或中转站登录状态。</p>
           <div id="endpoints" class="endpoints" hidden>
             <div class="endpoint">
               <span>Octopus 页面</span>
@@ -31,7 +31,6 @@
               <code id="target-origin">—</code>
             </div>
           </div>
-          <ol id="steps" class="steps"></ol>
           <div id="direct-preview" class="direct-preview" hidden>
             <div class="preview-row"><span>操作</span><strong id="capture-action">—</strong></div>
             <div class="preview-row"><span>凭据</span><code id="credential-mask">—</code></div>
@@ -65,7 +64,7 @@
         <button id="secondary-action" class="secondary" hidden></button>
         <button id="copy-diagnostics" class="quiet">复制脱敏诊断</button>
         <button id="clear-diagnostics" class="quiet">清空诊断</button>
-        <button id="discard" class="quiet">清理扩展中的会话数据</button>
+        <button id="discard" class="quiet">清理当前站点临时导入</button>
       </div>
 
       <footer>

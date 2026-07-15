@@ -1057,16 +1057,7 @@
             },
             "platform": {
                 "detect_inconclusive": "无法可靠识别站点平台，请手动选择。",
-                "incompatible": "该站点不支持所需的认证恢复能力。"
-            },
-            "recovery": {
-                "not_found": "恢复会话不存在或已经过期。",
-                "expired": "恢复会话已经过期，请重新创建。",
-                "invalid": "恢复候选数据无效，请重新创建会话。",
-                "forbidden": "恢复会话校验失败，请重新创建。",
-                "replay": "该恢复 capability 已经使用，不能重复提交。",
-                "conflict": "账号或恢复会话已发生变化，请重新开始。",
-                "rate_limited": "恢复请求过于频繁，请稍后重试。"
+                "incompatible": "该站点不支持所需的认证能力。"
             },
             "upstream": {
                 "http_error": "站点上游请求失败（HTTP {statusCode}），请检查站点状态或稍后重试。",

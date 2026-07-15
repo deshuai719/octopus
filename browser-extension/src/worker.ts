@@ -6,6 +6,7 @@ import {
   canonicalHTTPOrigin,
   getOctopusBinding,
   octopusAPI,
+  permissionPattern,
   readOctopusPageAuth,
   storeOctopusBinding,
   validateOctopusBinding,
@@ -17,26 +18,16 @@ import {
   getDirectSession,
   putDirectSession,
   removeDirectSession,
+  shouldRemoveDirectSession,
 } from "./direct-session";
-import { recoveryCandidateFailureMessage } from "./errors";
-import { httpOriginFromURL, parseRecoveryPacket, permissionPattern } from "./packet";
+import { clearLegacyRecoveryState } from "./legacy-cleanup";
 import { detectCurrentPlatform, PLATFORM_STATUS_SIGNATURES } from "./platform-detect";
-import {
-  claimNewAPITokenGeneration,
-  discardRecoverySession,
-  getRecoverySession,
-  RECOVERY_ERROR_KEY,
-  RECOVERY_EXPIRY_ALARM,
-  storeRecoverySession,
-} from "./session";
 import type {
-  CandidateCredential,
   DirectCaptureCandidate,
   DirectCaptureView,
   ExtractResult,
   OctopusBinding,
   Platform,
-  RecoveryPacket,
   SessionEvent,
   WorkerRequest,
   WorkerResponse,
@@ -46,6 +37,22 @@ let pendingReplacement: OctopusBinding | undefined;
 const PENDING_REPLACEMENT_ORIGIN_KEY = "octopusPendingReplacementOriginV1";
 const PENDING_REPLACEMENT_EXPIRY_ALARM = "octopus-pending-replacement-expiry";
 const DIRECT_PERMISSION_ALARM_PREFIX = "octopus-direct-permission:";
+
+void clearLegacyRecoveryState().catch(async (error: unknown) => {
+  const message = sanitizeDiagnosticMessage(error);
+  try {
+    await recordDiagnostic({
+      at: new Date().toISOString(),
+      operation_id: crypto.randomUUID(),
+      error_code: "extension.upgrade_cleanup.failed",
+      stage: "upgrade_cleanup",
+      message,
+    });
+  } catch {
+    // The panel notification below remains the user-visible failure path.
+  }
+  await notifyPanel({ type: "operation_error", message: `旧扩展状态清理失败：${message}` });
+});
 
 function directPermissionAlarmName(origin: string): string {
   return DIRECT_PERMISSION_ALARM_PREFIX + encodeURIComponent(origin);
@@ -65,64 +72,12 @@ async function revokePermissionUnlessBound(origin: string): Promise<void> {
   if (binding?.origin !== origin) await revokeDirectPermission(origin);
 }
 
-type RecoveryPacketPageResult =
-  | { kind: "missing" }
-  | { kind: "invalid_json" }
-  | { kind: "packet"; value: unknown };
-
-async function readPacketFromPage(tabId: number): Promise<RecoveryPacket | undefined> {
-  const [{ result }] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => {
-      const node = document.querySelector<HTMLScriptElement>('script[data-octopus-recovery="true"]');
-      if (!node?.textContent) return { kind: "missing" } as const;
-      const bridgeWindow = window as Window & { __octopusRecoveryBridge?: boolean };
-      if (!bridgeWindow.__octopusRecoveryBridge) {
-        bridgeWindow.__octopusRecoveryBridge = true;
-        window.addEventListener("message", (event) => {
-          if (
-            event.source === window &&
-            event.origin === location.origin &&
-            event.data?.source === "octopus" &&
-            event.data?.type === "octopus_auth_recovery_terminal" &&
-            typeof event.data?.session_id === "string"
-          ) {
-            void chrome.runtime.sendMessage({
-              type: "page_terminal",
-              session_id: event.data.session_id,
-            });
-          }
-        });
-      }
-      try {
-        return { kind: "packet", value: JSON.parse(node.textContent) as unknown } as const;
-      } catch {
-        return { kind: "invalid_json" } as const;
-      }
-    },
-  });
-  const pageResult = result as RecoveryPacketPageResult | RecoveryPacket | undefined;
-  if (!pageResult || typeof pageResult !== "object") throw new Error("恢复会话读取结果无效");
-  if ("kind" in pageResult) {
-    if (pageResult.kind === "missing") return undefined;
-    if (pageResult.kind === "invalid_json") throw new Error("恢复会话 JSON 无效");
-    return parseRecoveryPacket(pageResult.value);
-  }
-  // Accept the unwrapped result used by already-open extension pages during a
-  // service-worker update; the next page read always uses the tagged shape.
-  return parseRecoveryPacket(pageResult);
-}
-
 async function notifyPanel(event: SessionEvent): Promise<void> {
   try {
     await chrome.runtime.sendMessage(event);
   } catch {
     // The panel may still be loading; it also reads the persisted session on startup.
   }
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "无法读取恢复会话";
 }
 
 async function readPageAuth(tabId: number) {
@@ -242,30 +197,18 @@ async function routeClickedTab(tab: chrome.tabs.Tab, permissionPromise: Promise<
     if (!tab.id) throw new Error("无法读取当前标签页");
     const granted = await permissionPromise;
     if (!granted) throw new Error("未获得当前站点权限");
-    const packet = await readPacketFromPage(tab.id);
-    if (packet) {
-      await storeRecoverySession(packet);
-      await chrome.storage.session.remove(RECOVERY_ERROR_KEY);
-      await notifyPanel({ type: "session_updated", packet });
-      if (origin) await revokePermissionUnlessBound(origin);
-      return { ok: true, mode: "legacy", origin, packet };
-    }
     if (!origin) throw new Error("当前标签页不是可访问的 HTTP(S) 页面");
     const pageAuth = await readPageAuth(tab.id);
     if (pageAuth) {
-      const response = await initializeOctopusBinding(origin, pageAuth);
-      await chrome.storage.session.remove(RECOVERY_ERROR_KEY);
-      return response;
+      return initializeOctopusBinding(origin, pageAuth);
     }
     const response = await startDirectCapture(tab.id, origin);
     if (!response.ok) throw new Error(response.message ?? "直接捕获失败");
-    await chrome.storage.session.remove(RECOVERY_ERROR_KEY);
     return response;
   } catch (error) {
     const message = sanitizeDiagnosticMessage(error);
-    await chrome.storage.session.set({ [RECOVERY_ERROR_KEY]: message });
     await recordDiagnostic({ at: new Date().toISOString(), operation_id: operationID, origin, error_code: (error as { error_code?: string })?.error_code ?? "extension.capture.failed", stage: (error as { stage?: string })?.stage ?? "credential_extraction", suggested_action: (error as { suggested_action?: string })?.suggested_action, http_status: (error as { http_status?: number })?.http_status, message });
-    await notifyPanel({ type: "session_error", message });
+    await notifyPanel({ type: "operation_error", message });
     if (origin) await revokePermissionUnlessBound(origin);
     return { ok: false, origin, message };
   }
@@ -274,7 +217,7 @@ async function routeClickedTab(tab: chrome.tabs.Tab, permissionPromise: Promise<
 chrome.action.onClicked.addListener((tab) => {
   if (!tab.id) return;
   void chrome.sidePanel.open({ windowId: tab.windowId }).catch(async (error: unknown) => {
-    await chrome.storage.session.set({ [RECOVERY_ERROR_KEY]: errorMessage(error) });
+    await notifyPanel({ type: "operation_error", message: sanitizeDiagnosticMessage(error) });
   });
   const origin = canonicalHTTPOrigin(tab.url);
   const permissionPromise = origin && chrome.permissions.request
@@ -284,7 +227,6 @@ chrome.action.onClicked.addListener((tab) => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === RECOVERY_EXPIRY_ALARM) void discardRecoverySession();
   if (alarm.name === PENDING_REPLACEMENT_EXPIRY_ALARM) {
     void (async () => {
       const stored = await chrome.storage.session.get(PENDING_REPLACEMENT_ORIGIN_KEY);
@@ -309,124 +251,15 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
-async function findTargetTab(packet: RecoveryPacket) {
-  const tabs = await chrome.tabs.query({ url: permissionPattern(packet.origin) });
-  const tab = tabs.find((item) => item.active) ?? tabs.at(-1);
-  if (!tab?.id) throw new Error("请先打开目标站点并完成登录");
-  return tab.id;
-}
-
-async function extractCandidate(packet: RecoveryPacket): Promise<ExtractResult> {
-  const tabId = await findTargetTab(packet);
-  switch (packet.auth.compatible_family) {
-    case "new-api": {
-      const runExtraction = async (allowTokenGeneration: boolean): Promise<ExtractResult> => {
-        const [{ result }] = await chrome.scripting.executeScript({
-          target: { tabId },
-          func: extractNewAPICredentials,
-          args: [{ allow_token_generation: allowTokenGeneration }],
-        });
-        return result ?? { kind: "error", message: "NewAPI 提取脚本没有返回结果" };
-      };
-      let extracted = await runExtraction(false);
-      if (extracted.kind === "manual_required" && extracted.reason === "system_token_missing") {
-        if (!await claimNewAPITokenGeneration(packet.session_id)) {
-          return {
-            kind: "error",
-            message: "本恢复会话已经尝试过自动生成系统令牌。为避免重复重置，请新建恢复会话或改用手动填写。",
-          };
-        }
-        extracted = await runExtraction(true);
-      }
-      if (extracted.kind === "manual_required" && extracted.suggested_paths?.[0]) {
-        const tokenPage = new URL(extracted.suggested_paths[0], packet.origin);
-        if (tokenPage.origin === packet.origin) await chrome.tabs.update(tabId, { url: tokenPage.href, active: true });
-      }
-      return extracted;
-    }
-    case "sub2api": {
-      const [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, func: extractSub2APICredentials });
-      return result ?? { kind: "error", message: "Sub2API 提取脚本没有返回结果" };
-    }
-    case "anyrouter": {
-      const cookie = await chrome.cookies.get({ url: packet.origin, name: "session" });
-      if (!cookie?.value) return { kind: "not_logged_in", message: "目标域名没有 session Cookie，请先完成登录" };
-      const [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, func: extractAnyRouterUser });
-      if (!result || result.kind !== "candidate" || !result.candidate?.platform_user_id) {
-        return result ?? { kind: "error", message: "AnyRouter 用户信息提取失败" };
-      }
-      return {
-        kind: "candidate",
-        candidate: {
-          access_token: cookie.value,
-          platform_user_id: result.candidate.platform_user_id,
-          identity_label: result.candidate.identity_label,
-        },
-      };
-    }
-  }
-}
-
-async function submitCandidate(packet: RecoveryPacket, extracted: ExtractResult) {
-  if (extracted.kind !== "candidate") return extracted;
-  const candidate: CandidateCredential = {
-    account_id: packet.account_id,
-    origin: packet.origin,
-    platform: packet.platform,
-    ...extracted.candidate,
-  };
-  let response: Response;
-  try {
-    response = await fetch(
-      `${packet.api_base_url}/api/v1/site/auth-recovery/${encodeURIComponent(packet.session_id)}/candidate`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Octopus-Recovery-Capability": packet.capability,
-        },
-        body: JSON.stringify(candidate),
-      },
-    );
-  } catch {
-    await discardRecoverySession();
-    return {
-      kind: "error",
-      message: extracted.generated_system_token
-        ? "NewAPI 系统令牌已更新，但尚未保存到 Octopus。候选提交请求失败，请新建恢复会话或手动填写。"
-        : "候选凭据提交请求失败，请新建恢复会话或手动填写。",
-    } satisfies ExtractResult;
-  }
-  const payload = (await response.json().catch(() => null)) as { error_code?: string } | null;
-  if (!response.ok) {
-    await discardRecoverySession();
-    return {
-      kind: "error",
-      message: extracted.generated_system_token
-        ? `NewAPI 系统令牌已更新，但尚未保存到 Octopus。${recoveryCandidateFailureMessage(payload?.error_code, response.status)}。本次 capability 已结束，请新建恢复会话或改用手动填写。`
-        : `${recoveryCandidateFailureMessage(payload?.error_code, response.status)}。本次 capability 已结束，请回到 Octopus 新建恢复会话或改用手动填写。`,
-    } satisfies ExtractResult;
-  }
-  await discardRecoverySession();
-  return extracted;
-}
-
-chrome.runtime.onMessage.addListener((request: WorkerRequest, sender, sendResponse: (response: WorkerResponse) => void) => {
+chrome.runtime.onMessage.addListener((request: WorkerRequest, _sender, sendResponse: (response: WorkerResponse) => void) => {
   void (async () => {
     try {
-      if (request.type === "get_session") {
-        const packet = await getRecoverySession();
-        const stored = packet ? {} : await chrome.storage.session.get(RECOVERY_ERROR_KEY);
-        const message = typeof stored[RECOVERY_ERROR_KEY] === "string" ? stored[RECOVERY_ERROR_KEY] : undefined;
-        sendResponse({ ok: true, packet, message });
-        return;
-      }
       if (request.type === "capture_active_session") {
         let tab: chrome.tabs.Tab;
         try {
           const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
           if (!activeTab?.id) throw new Error("无法读取当前标签页");
-          const activeOrigin = httpOriginFromURL(activeTab.url);
+          const activeOrigin = canonicalHTTPOrigin(activeTab.url);
           if (activeOrigin !== request.expected_origin) {
             throw new Error("当前标签页已切换，请重新点击读取");
           }
@@ -440,34 +273,20 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, sender, sendRespon
         sendResponse(await routeClickedTab(tab, Promise.resolve(true)));
         return;
       }
-      if (request.type === "discard_session") {
-        await discardRecoverySession();
-        sendResponse({ ok: true });
-        return;
-      }
-      if (request.type === "page_terminal") {
-        const packet = await getRecoverySession();
-        const senderOrigin = sender.tab?.url ? new URL(sender.tab.url).origin : "";
-        if (packet && request.session_id === packet.session_id && senderOrigin === packet.api_base_url) {
-          await discardRecoverySession();
-        }
-        sendResponse({ ok: true });
-        return;
-      }
       if (request.type === "get_active_context") {
         const origin = request.origin;
-        const packet = await getRecoverySession();
-        if (packet && (!origin || packet.origin === origin || packet.api_base_url === origin)) {
-          sendResponse({ ok: true, mode: "legacy", origin, packet });
-          return;
-        }
         if (origin) {
           const indexed = await getDirectSession(origin);
           if (indexed?.capture_id) {
             const binding = await getOctopusBinding();
             if (!binding) throw new Error("Octopus 绑定不存在");
             const capture = await octopusAPI<DirectCaptureView>(binding, `/api/v1/site/direct-capture/${encodeURIComponent(indexed.capture_id)}`, indexed.operation_id);
-            await putDirectSession({ ...indexed, phase: capture.phase, expires_at: capture.expires_at, capture });
+            if (shouldRemoveDirectSession(capture.phase)) {
+              await removeDirectSession(origin);
+              await revokeDirectPermission(origin);
+            } else {
+              await putDirectSession({ ...indexed, phase: capture.phase, expires_at: capture.expires_at, capture });
+            }
             sendResponse({
               ok: true,
               mode: "direct",
@@ -502,7 +321,6 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, sender, sendRespon
         for (const item of await clearAllDirectSessions()) {
           await revokeDirectPermission(item.origin);
         }
-        await discardRecoverySession();
         if (current && current.origin !== next.origin) await chrome.permissions.remove({ origins: [permissionPattern(current.origin)] });
         await notifyPanel({ type: "binding_updated", origin: next.origin });
         sendResponse({ ok: true, mode: "binding", origin: next.origin });
@@ -562,7 +380,8 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, sender, sendRespon
           body = {};
         }
         const capture = await octopusAPI<DirectCaptureView>(binding, path, indexed.operation_id, { method: "POST", body: JSON.stringify(body) });
-        await putDirectSession({ ...indexed, capture_id: capture.capture_id, phase: capture.phase, expires_at: capture.expires_at, capture });
+        if (shouldRemoveDirectSession(capture.phase)) await removeDirectSession(request.origin);
+        else await putDirectSession({ ...indexed, capture_id: capture.capture_id, phase: capture.phase, expires_at: capture.expires_at, capture });
         if (["completed", "sync_failed", "canceled", "failed", "conflict", "expired"].includes(capture.phase)) {
           await revokeDirectPermission(request.origin);
         }
@@ -570,26 +389,18 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, sender, sendRespon
         sendResponse({ ok: true, mode: "direct", origin: request.origin, capture });
         return;
       }
+      if (request.type === "clear_direct_session") {
+        await removeDirectSession(request.origin);
+        await revokePermissionUnlessBound(request.origin);
+        sendResponse({ ok: true, mode: "direct", origin: request.origin });
+        return;
+      }
       if (request.type === "clear_diagnostics") {
         await clearDiagnostics();
         sendResponse({ ok: true });
         return;
       }
-      const packet = await getRecoverySession();
-      if (!packet) throw new Error("没有活动恢复会话，请回到 Octopus 页面并点击扩展图标");
-      if (request.type === "open_target") {
-        const hasPermission = await chrome.permissions.contains({ origins: [permissionPattern(packet.origin)] });
-        if (!hasPermission) throw new Error("请先授权目标站点临时权限");
-        await chrome.tabs.create({ url: packet.origin, active: true });
-        sendResponse({ ok: true, packet });
-        return;
-      }
-      if (request.type === "extract_and_submit") {
-        const hasPermission = await chrome.permissions.contains({ origins: [permissionPattern(packet.origin)] });
-        if (!hasPermission) throw new Error("请先授权并打开目标站点");
-        const result = await submitCandidate(packet, await extractCandidate(packet));
-        sendResponse({ ok: result.kind !== "error", result });
-      }
+      throw new Error("扩展请求类型不受支持");
     } catch (error) {
       const message = sanitizeDiagnosticMessage(error);
       const origin = "origin" in request && typeof request.origin === "string" ? request.origin : undefined;

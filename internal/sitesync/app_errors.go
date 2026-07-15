@@ -30,15 +30,6 @@ const (
 	CodeSitePlatformDetectInconclusive = "site.platform.detect_inconclusive"
 	CodeSitePlatformIncompatible       = "site.platform.incompatible"
 
-	CodeSiteRecoveryNotFound       = "site.recovery.not_found"
-	CodeSiteRecoveryExpired        = "site.recovery.expired"
-	CodeSiteRecoveryInvalid        = "site.recovery.invalid"
-	CodeSiteRecoveryForbidden      = "site.recovery.forbidden"
-	CodeSiteRecoveryReplay         = "site.recovery.replay"
-	CodeSiteRecoveryConflict       = "site.recovery.conflict"
-	CodeSiteRecoveryRateLimited    = "site.recovery.rate_limited"
-	CodeSiteRecoveryIdentityChange = "site.auth.identity_mismatch"
-
 	CodeSiteUpstreamHTTPError           = "site.upstream.http_error"
 	CodeSiteUpstreamDecodeFailed        = "site.upstream.decode_failed"
 	CodeSiteUpstreamCloudflareChallenge = "site.upstream.cloudflare_challenge"

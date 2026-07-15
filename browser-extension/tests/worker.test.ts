@@ -1,31 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RecoveryPacket } from "../src/types";
-
-const packet: RecoveryPacket = {
-  version: 1,
-  api_base_url: "https://octopus.example.com",
-  session_id: "session-id-long-enough",
-  capability: "capability-value-that-is-long-enough-123",
-  account_id: 1,
-  site_id: 2,
-  origin: "https://site.example.com",
-  platform: "new-api",
-  expires_at: new Date(Date.now() + 60_000).toISOString(),
-  auth: {
-    compatible_family: "new-api",
-    required_fields: ["access_token", "platform_user_id"],
-    extractable_fields: ["access_token", "platform_user_id"],
-    recovery_guide: { title: "重新登录", steps: ["登录"], manual_fallback: "手动粘贴" },
-  },
-};
 
 let actionHandler: ((tab: chrome.tabs.Tab) => unknown) | undefined;
 let messageHandler:
   | ((request: unknown, sender: chrome.runtime.MessageSender, sendResponse: (response: unknown) => void) => boolean)
   | undefined;
-let resolveScript: ((value: Array<{ result: RecoveryPacket }>) => void) | undefined;
 let openPanel: ReturnType<typeof vi.fn>;
-let sendMessage: ReturnType<typeof vi.fn>;
+let executeScript: ReturnType<typeof vi.fn>;
 let queryTabs: ReturnType<typeof vi.fn<() => Promise<chrome.tabs.Tab[]>>>;
 
 beforeEach(() => {
@@ -33,15 +13,12 @@ beforeEach(() => {
   actionHandler = undefined;
   messageHandler = undefined;
   openPanel = vi.fn(async () => undefined);
-  sendMessage = vi.fn(async () => undefined);
+  executeScript = vi.fn(() => new Promise(() => undefined));
   queryTabs = vi.fn(async () => []);
-  const scriptResult = new Promise<Array<{ result: RecoveryPacket }>>((resolve) => {
-    resolveScript = resolve;
-  });
-  const stored: Record<string, unknown> = {};
+  const sessionValues: Record<string, unknown> = {};
   vi.stubGlobal("chrome", {
     action: { onClicked: { addListener: vi.fn((handler) => { actionHandler = handler; }) } },
-    scripting: { executeScript: vi.fn(() => scriptResult) },
+    scripting: { executeScript },
     sidePanel: { open: openPanel },
     storage: {
       local: {
@@ -50,9 +27,11 @@ beforeEach(() => {
         remove: vi.fn(async () => undefined),
       },
       session: {
-        get: vi.fn(async (key: string) => ({ [key]: stored[key] })),
-        set: vi.fn(async (value: Record<string, unknown>) => Object.assign(stored, value)),
-        remove: vi.fn(async (key: string) => { delete stored[key]; }),
+        get: vi.fn(async (key: string) => ({ [key]: sessionValues[key] })),
+        set: vi.fn(async (value: Record<string, unknown>) => Object.assign(sessionValues, value)),
+        remove: vi.fn(async (keys: string | string[]) => {
+          for (const key of Array.isArray(keys) ? keys : [keys]) delete sessionValues[key];
+        }),
       },
     },
     alarms: {
@@ -66,7 +45,7 @@ beforeEach(() => {
     },
     runtime: {
       onMessage: { addListener: vi.fn((handler) => { messageHandler = handler; }) },
-      sendMessage,
+      sendMessage: vi.fn(async () => undefined),
     },
     tabs: {
       query: queryTabs,
@@ -78,24 +57,18 @@ beforeEach(() => {
 });
 
 describe("toolbar entry", () => {
-  it("opens the side panel before waiting for recovery packet extraction", async () => {
+  it("opens the side panel before reading the current page", async () => {
     await import("../src/worker");
 
     expect(actionHandler).toBeTypeOf("function");
-    actionHandler!({ id: 5, windowId: 7 } as chrome.tabs.Tab);
+    actionHandler!({ id: 5, windowId: 7, url: "https://octopus.example/settings" } as chrome.tabs.Tab);
 
     expect(openPanel).toHaveBeenCalledWith({ windowId: 7 });
-    expect(sendMessage).not.toHaveBeenCalled();
-
-    resolveScript!([{ result: packet }]);
-    await vi.waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledWith({ type: "session_updated", packet });
-    });
+    await vi.waitFor(() => expect(executeScript).toHaveBeenCalledTimes(1));
   });
 
   it("rejects side-panel capture when the active tab changed after permission was granted", async () => {
     await import("../src/worker");
-    resolveScript!([{ result: packet }]);
     queryTabs.mockResolvedValue([
       { id: 9, url: "https://other.example.com/" } as chrome.tabs.Tab,
     ]);
@@ -112,32 +85,9 @@ describe("toolbar entry", () => {
       ok: false,
       message: "当前标签页已切换，请重新点击读取",
     });
-    expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
+    expect(executeScript).not.toHaveBeenCalled();
     expect(chrome.permissions.remove).toHaveBeenCalledWith({
       origins: ["https://octopus.example.com/*"],
-    });
-  });
-
-  it("keeps a valid legacy recovery packet on the side-panel route", async () => {
-    await import("../src/worker");
-    queryTabs.mockResolvedValue([
-      { id: 5, url: "https://octopus.example.com/sites" } as chrome.tabs.Tab,
-    ]);
-
-    const responsePromise = new Promise<unknown>((resolve) => {
-      messageHandler!(
-        { type: "capture_active_session", expected_origin: "https://octopus.example.com" },
-        {} as chrome.runtime.MessageSender,
-        resolve,
-      );
-    });
-    resolveScript!([{ result: packet }]);
-
-    await expect(responsePromise).resolves.toEqual({
-      ok: true,
-      mode: "legacy",
-      origin: "https://octopus.example.com",
-      packet,
     });
   });
 });

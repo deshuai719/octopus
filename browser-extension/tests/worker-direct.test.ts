@@ -34,7 +34,6 @@ beforeEach(() => {
   sessionValues = {};
   queryTabs = vi.fn(async () => []);
   executeScript = vi.fn()
-    .mockResolvedValueOnce([{ result: { kind: "missing" } }])
     .mockResolvedValueOnce([{ result: undefined }])
     .mockResolvedValueOnce([{ result: {
       platform: "new-api",
@@ -78,7 +77,9 @@ beforeEach(() => {
       session: {
         get: vi.fn(async (key: string) => ({ [key]: sessionValues[key] })),
         set: vi.fn(async (value: Record<string, unknown>) => Object.assign(sessionValues, value)),
-        remove: vi.fn(async (key: string) => { delete sessionValues[key]; }),
+        remove: vi.fn(async (keys: string | string[]) => {
+          for (const key of Array.isArray(keys) ? keys : [keys]) delete sessionValues[key];
+        }),
       },
     },
     alarms: { create: vi.fn(), clear: vi.fn(), onAlarm: { addListener: vi.fn() } },
@@ -97,10 +98,9 @@ beforeEach(() => {
 });
 
 describe("direct capture worker flow", () => {
-  it("routes a side-panel page read through Octopus binding and clears a stale recovery error", async () => {
+  it("routes a side-panel page read through Octopus binding and clears legacy upgrade state", async () => {
     sessionValues.octopusRecoveryError = "恢复会话格式无效";
     executeScript.mockReset()
-      .mockResolvedValueOnce([{ result: { kind: "missing" } }])
       .mockResolvedValueOnce([{ result: {
         token: "fresh-administrator-jwt",
         expire_at: "2099-01-01T00:00:00Z",
@@ -125,33 +125,7 @@ describe("direct capture worker flow", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("reports malformed recovery JSON instead of falling through to direct capture", async () => {
-    executeScript.mockReset().mockResolvedValueOnce([{ result: { kind: "invalid_json" } }]);
-    queryTabs.mockResolvedValue([
-      { id: 7, windowId: 3, url: "https://relay.example/console" } as chrome.tabs.Tab,
-    ]);
-    await import("../src/worker");
-
-    const response = await new Promise<WorkerResponse>((resolve) => {
-      messageHandler!(
-        { type: "capture_active_session", expected_origin: "https://relay.example" },
-        {} as chrome.runtime.MessageSender,
-        resolve,
-      );
-    });
-
-    expect(response).toEqual({
-      ok: false,
-      origin: "https://relay.example",
-      message: "恢复会话 JSON 无效",
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(chrome.permissions.remove).toHaveBeenCalledWith({
-      origins: ["https://relay.example/*"],
-    });
-  });
-
-  it("routes a side-panel page read through direct capture when no recovery packet exists", async () => {
+  it("routes a side-panel page read directly through capture", async () => {
     queryTabs.mockResolvedValue([
       { id: 7, windowId: 3, url: "https://relay.example/console" } as chrome.tabs.Tab,
     ]);
@@ -175,6 +149,90 @@ describe("direct capture worker flow", () => {
     expect(chrome.permissions.remove).toHaveBeenCalledWith({
       origins: ["https://relay.example/*"],
     });
+  });
+
+  it("restarts a completed origin with a new operation without clearing the binding", async () => {
+    sessionValues.octopusDirectCaptureIndexV1 = {
+      "https://relay.example": {
+        origin: "https://relay.example",
+        operation_id: "completed-operation",
+        phase: "completed",
+        expires_at: "2099-01-01T00:00:00Z",
+        generation_attempted: false,
+      },
+    };
+    queryTabs.mockResolvedValue([
+      { id: 7, windowId: 3, url: "https://relay.example/console" } as chrome.tabs.Tab,
+    ]);
+    await import("../src/worker");
+
+    const response = await new Promise<WorkerResponse>((resolve) => {
+      messageHandler!(
+        { type: "capture_active_session", expected_origin: "https://relay.example" },
+        {} as chrome.runtime.MessageSender,
+        resolve,
+      );
+    });
+
+    expect(response).toMatchObject({ ok: true, mode: "direct", origin: "https://relay.example" });
+    const index = sessionValues.octopusDirectCaptureIndexV1 as Record<string, { operation_id: string }>;
+    expect(index["https://relay.example"].operation_id).not.toBe("completed-operation");
+    expect(localValues[OCTOPUS_BINDING_KEY]).toMatchObject({ origin: "https://octopus.example" });
+  });
+
+  it("captures three origins sequentially with one Octopus binding", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/user/status")) {
+        return responseAt(url, JSON.stringify({ data: "ok" }), {
+          status: 200,
+          headers: { "X-Octopus-Direct-Capture-Version": "1" },
+        });
+      }
+      const body = JSON.parse(String(init?.body)) as { origin: string };
+      const suffix = new URL(body.origin).hostname.split(".")[0];
+      return responseAt(url, JSON.stringify({ data: {
+        capture_id: `capture-${suffix}`,
+        operation_id: `server-${suffix}`,
+        origin: body.origin,
+        platform: "new-api",
+        phase: "preview_ready",
+        expires_at: "2099-01-01T00:00:00Z",
+        preview_version: `preview-${suffix}`,
+        candidate: { credential_type: "access_token", access_token_mask: "cand••••alue", has_refresh_token: false },
+      } }), { status: 200 });
+    });
+    await import("../src/worker");
+
+    for (const [index, origin] of ["https://a.example", "https://b.example", "https://c.example"].entries()) {
+      executeScript.mockReset()
+        .mockResolvedValueOnce([{ result: undefined }])
+        .mockResolvedValueOnce([{ result: {
+          platform: "new-api",
+          evidence: [{ code: "browser.strong.status_schema.new-api" }],
+        } }])
+        .mockResolvedValueOnce([{ result: {
+          kind: "candidate",
+          candidate: { access_token: `candidate-secret-${index}`, platform_user_id: index + 1 },
+        } }]);
+      queryTabs.mockResolvedValue([
+        { id: 10 + index, windowId: 3, url: `${origin}/console` } as chrome.tabs.Tab,
+      ]);
+
+      const response = await new Promise<WorkerResponse>((resolve) => {
+        messageHandler!(
+          { type: "capture_active_session", expected_origin: origin },
+          {} as chrome.runtime.MessageSender,
+          resolve,
+        );
+      });
+
+      expect(response).toMatchObject({ ok: true, mode: "direct", origin, capture: { origin } });
+    }
+
+    const index = sessionValues.octopusDirectCaptureIndexV1 as Record<string, { origin: string }>;
+    expect(Object.keys(index).sort()).toEqual(["https://a.example", "https://b.example", "https://c.example"]);
+    expect(localValues[OCTOPUS_BINDING_KEY]).toMatchObject({ origin: "https://octopus.example" });
   });
 
   it("submits structural evidence and never persists the raw candidate", async () => {

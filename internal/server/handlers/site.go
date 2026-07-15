@@ -44,10 +44,6 @@ func init() {
 		AddRoute(router.NewRoute("/last-sync-time", http.MethodGet).Handle(getSiteLastSyncTime)).
 		AddRoute(router.NewRoute("/last-checkin-time", http.MethodGet).Handle(getSiteLastCheckinTime)).
 		AddRoute(router.NewRoute("/auth-capabilities", http.MethodGet).Handle(getSiteAuthCapabilities)).
-		AddRoute(router.NewRoute("/account/:id/auth-recovery", http.MethodPost).Handle(createSiteAuthRecovery)).
-		AddRoute(router.NewRoute("/auth-recovery/:id", http.MethodGet).Handle(getSiteAuthRecovery)).
-		AddRoute(router.NewRoute("/auth-recovery/:id/confirm", http.MethodPost).Handle(confirmSiteAuthRecovery)).
-		AddRoute(router.NewRoute("/auth-recovery/:id/cancel", http.MethodPost).Handle(cancelSiteAuthRecovery)).
 		AddRoute(router.NewRoute("/direct-capture/:id", http.MethodGet).Handle(getSiteDirectCapture)).
 		AddRoute(router.NewRoute("/:id/available-models", http.MethodGet).Handle(getSiteAvailableModels))
 
@@ -81,9 +77,6 @@ func init() {
 		AddRoute(router.NewRoute("/restore/:id", http.MethodPost).Handle(restoreSite)).
 		AddRoute(router.NewRoute("/account/delete/:id", http.MethodDelete).Handle(deleteSiteAccount))
 
-	router.NewGroupRouter("/api/v1/site/auth-recovery").
-		Use(middleware.RequireJSON()).
-		AddRoute(router.NewRoute("/:id/candidate", http.MethodPost).Use(recoveryCandidateGuard()).Handle(submitSiteAuthRecoveryCandidate))
 }
 
 func listSite(c *gin.Context) {
@@ -475,69 +468,9 @@ func getSiteAuthCapabilities(c *gin.Context) {
 	resp.Success(c, sitesvc.PlatformAuthCapabilities())
 }
 
-func createSiteAuthRecovery(c *gin.Context) {
-	accountID, err := strconv.Atoi(c.Param("id"))
-	if err != nil || accountID <= 0 {
-		resp.InvalidParam(c)
-		return
-	}
-	view, err := sitesvc.CreateRecoverySession(c.Request.Context(), accountID, c.GetHeader("Authorization"))
-	if err != nil {
-		resp.ErrorWithAppError(c, http.StatusBadRequest, err)
-		return
-	}
-	resp.Success(c, view)
-}
-
-func getSiteAuthRecovery(c *gin.Context) {
-	view, err := sitesvc.GetRecoverySession(c.Request.Context(), c.Param("id"), c.GetHeader("Authorization"))
-	if err != nil {
-		resp.ErrorWithAppError(c, http.StatusBadRequest, err)
-		return
-	}
-	resp.Success(c, view)
-}
-
-func submitSiteAuthRecoveryCandidate(c *gin.Context) {
-	var input sitesync.RecoveryCandidateInput
-	if err := decodeStrictRecoveryJSON(c, &input); err != nil {
-		resp.ErrorWithAppError(c, http.StatusBadRequest, apperror.InvalidJSON("invalid recovery candidate payload"))
-		return
-	}
-	view, err := sitesvc.SubmitRecoveryCandidate(
-		c.Request.Context(),
-		c.Param("id"),
-		c.GetHeader("X-Octopus-Recovery-Capability"),
-		input,
-	)
-	if err != nil {
-		resp.ErrorWithAppError(c, http.StatusBadRequest, err)
-		return
-	}
-	resp.Success(c, view)
-}
-
-func confirmSiteAuthRecovery(c *gin.Context) {
-	view, err := sitesvc.ConfirmRecoverySession(c.Request.Context(), c.Param("id"), c.GetHeader("Authorization"))
-	if err != nil {
-		resp.ErrorWithAppError(c, http.StatusBadRequest, err)
-		return
-	}
-	resp.Success(c, view)
-}
-
-func cancelSiteAuthRecovery(c *gin.Context) {
-	view, err := sitesvc.CancelRecoverySession(c.Request.Context(), c.Param("id"), c.GetHeader("Authorization"))
-	if err != nil {
-		resp.ErrorWithAppError(c, http.StatusBadRequest, err)
-		return
-	}
-	resp.Success(c, view)
-}
-
 func previewSiteDirectCapture(c *gin.Context) {
 	var candidate sitesync.DirectCaptureCandidate
-	if err := decodeStrictRecoveryJSON(c, &candidate); err != nil {
+	if err := decodeStrictSiteJSON(c, &candidate); err != nil {
 		resp.ErrorWithAppError(c, http.StatusBadRequest, apperror.InvalidJSON("invalid direct capture preview payload"))
 		return
 	}
@@ -554,7 +487,7 @@ func previewSiteDirectCapture(c *gin.Context) {
 
 func resolveSiteDirectCapture(c *gin.Context) {
 	var request sitesvc.DirectCaptureResolveRequest
-	if err := decodeStrictRecoveryJSON(c, &request); err != nil {
+	if err := decodeStrictSiteJSON(c, &request); err != nil {
 		resp.ErrorWithAppError(c, http.StatusBadRequest, apperror.InvalidJSON("invalid direct capture resolution payload"))
 		return
 	}
@@ -568,7 +501,7 @@ func resolveSiteDirectCapture(c *gin.Context) {
 
 func confirmSiteDirectCapture(c *gin.Context) {
 	var request sitesvc.DirectCaptureConfirmRequest
-	if err := decodeStrictRecoveryJSON(c, &request); err != nil {
+	if err := decodeStrictSiteJSON(c, &request); err != nil {
 		resp.ErrorWithAppError(c, http.StatusBadRequest, apperror.InvalidJSON("invalid direct capture confirmation payload"))
 		return
 	}
@@ -607,7 +540,7 @@ func retrySiteDirectCaptureSync(c *gin.Context) {
 	resp.Success(c, view)
 }
 
-func decodeStrictRecoveryJSON(c *gin.Context, target any) error {
+func decodeStrictSiteJSON(c *gin.Context, target any) error {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64*1024)
 	decoder := json.NewDecoder(c.Request.Body)
 	decoder.DisallowUnknownFields()

@@ -1,13 +1,12 @@
-import { grantPermissionAndOpenTarget, runWithRoutedPagePermission, runWithTargetPermission } from "./permissions";
+import { canonicalHTTPOrigin } from "./binding";
+import { runWithRoutedPagePermission, runWithTargetPermission } from "./permissions";
 import { clearDiagnostics, formatDiagnostics, listDiagnostics } from "./diagnostics";
-import { httpOriginFromURL } from "./packet";
-import { candidateDeliveredView, loginRequiredView, readingView, readyView, requestingPermissionView, retryExtractionView, submittingView, waitingView } from "./panel-state";
+import { readingView, submittingView, waitingView } from "./panel-state";
 import type { PanelPrimaryAction, PanelView } from "./panel-state";
-import type { DirectCaptureView, RecoveryPacket, SessionEvent, WorkerRequest, WorkerResponse } from "./types";
+import type { DirectCaptureView, SessionEvent, WorkerRequest, WorkerResponse } from "./types";
 
 const status = document.querySelector<HTMLElement>("#status")!;
 const detail = document.querySelector<HTMLElement>("#detail")!;
-const steps = document.querySelector<HTMLOListElement>("#steps")!;
 const endpoints = document.querySelector<HTMLElement>("#endpoints")!;
 const apiOrigin = document.querySelector<HTMLElement>("#api-origin")!;
 const targetOrigin = document.querySelector<HTMLElement>("#target-origin")!;
@@ -35,7 +34,6 @@ const manualTokenField = document.querySelector<HTMLElement>("#manual-token-fiel
 const manualTokenInput = document.querySelector<HTMLInputElement>("#manual-token")!;
 const manualTokenButton = document.querySelector<HTMLButtonElement>("#manual-token-action")!;
 
-let currentPacket: RecoveryPacket | undefined;
 let currentCapture: DirectCaptureView | undefined;
 let currentOrigin: string | undefined;
 let primaryAction: PanelPrimaryAction = "capture";
@@ -78,20 +76,6 @@ function showManualTokenInput(): void {
   manualTokenButton.hidden = false;
 }
 
-function renderPacket(packet: RecoveryPacket): void {
-  clearDirectPreview();
-  currentPacket = packet;
-  endpoints.hidden = false;
-  apiOrigin.textContent = packet.api_base_url;
-  targetOrigin.textContent = packet.origin;
-  steps.replaceChildren(...packet.auth.recovery_guide.steps.map((text) => {
-    const item = document.createElement("li");
-    item.textContent = text;
-    return item;
-  }));
-  renderView(readyView(packet.auth.recovery_guide.title));
-}
-
 function captureActionLabel(action: string | undefined): string {
   switch (action) {
     case "create_site_account": return "新建站点和账号";
@@ -102,12 +86,10 @@ function captureActionLabel(action: string | undefined): string {
 }
 
 function renderCapture(capture: DirectCaptureView): void {
-  currentPacket = undefined;
   currentCapture = capture;
   currentOrigin = capture.origin || currentOrigin;
   endpoints.hidden = false;
   targetOrigin.textContent = capture.origin;
-  steps.replaceChildren();
   directPreview.hidden = false;
   captureAction.textContent = captureActionLabel(capture.action);
   credentialMask.textContent = capture.candidate?.access_token_mask ?? "已在确认后清除";
@@ -153,51 +135,53 @@ function renderCapture(capture: DirectCaptureView): void {
       renderView({ status: "账号已保存，同步失败", detail: capture.error_message ?? "可以主动重试同步，不会再次写入凭据。", primaryAction: "retry_sync", primaryLabel: "重试同步", primaryDisabled: false });
       break;
     case "completed":
-      renderView({ status: "创建或更新完成", detail: capture.sync_result?.message ?? "账号保存和完整同步均已完成。", primaryAction: null, primaryLabel: "已完成", primaryDisabled: true });
+      renderView({ status: "创建或更新完成", detail: capture.sync_result?.message ?? "账号保存和完整同步均已完成。可以切换到下一站，或重新读取当前站点。", primaryAction: "capture", primaryLabel: "继续导入或重新读取", primaryDisabled: false });
       break;
     case "canceled":
       renderView(waitingView("本次直接捕获已取消，临时权限已清理。"));
+      break;
+    case "failed":
+    case "conflict":
+    case "expired":
+      renderView(waitingView(capture.error_message ?? "本次直接捕获已结束，请重新读取当前站点。"));
       break;
     default:
       renderView({ status: "正在处理", detail: capture.error_message ?? `当前阶段：${capture.phase}`, primaryAction: null, primaryLabel: "处理中", primaryDisabled: true });
   }
 }
 
-function clearPacketDisplay(): void {
-  currentPacket = undefined;
+function clearContextDisplay(): void {
   clearDirectPreview();
   endpoints.hidden = true;
   apiOrigin.textContent = "—";
   targetOrigin.textContent = "—";
-  steps.replaceChildren();
 }
 
 async function refreshCapturePageOrigin(): Promise<void> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  capturePageOrigin = httpOriginFromURL(tab?.url);
+  capturePageOrigin = canonicalHTTPOrigin(tab?.url);
   currentOrigin = capturePageOrigin;
 }
 
 function renderActiveContextResponse(response: WorkerResponse): void {
-  if (response.packet) renderPacket(response.packet);
-  else if (response.capture) {
+  if (response.capture) {
     if (response.binding?.origin) apiOrigin.textContent = response.binding.origin;
     renderCapture(response.capture);
   }
   else if (response.mode === "binding") {
-    clearPacketDisplay();
+    clearContextDisplay();
     endpoints.hidden = false;
     apiOrigin.textContent = response.origin ?? "—";
     targetOrigin.textContent = "Octopus 已初始化";
     renderView({ status: "Octopus 已连接", detail: "管理员 JWT 已验证并仅保存在本机。日常请在中转站页面点击扩展。", primaryAction: null, primaryLabel: "已初始化", primaryDisabled: true });
   } else if (response.mode === "direct" && response.message === "credential_generation") {
-    clearPacketDisplay();
+    clearContextDisplay();
     endpoints.hidden = false;
     targetOrigin.textContent = capturePageOrigin ?? "—";
     renderView({ status: "需要系统令牌", detail: "已确认登录，但页面没有完整系统访问令牌。生成操作会覆盖旧系统令牌，且本次最多执行一次。", primaryAction: "generate_direct", primaryLabel: "生成系统令牌并继续", primaryDisabled: false });
     showManualTokenInput();
   } else {
-    clearPacketDisplay();
+    clearContextDisplay();
     renderView(waitingView(response.message));
   }
 }
@@ -219,41 +203,8 @@ async function captureActiveSession(): Promise<void> {
   }
 }
 
-async function grantAndOpen(): Promise<void> {
-  const packet = currentPacket;
-  if (!packet) return renderView(waitingView("没有活动恢复会话。"));
-  renderView(requestingPermissionView());
-  try {
-    const response = await grantPermissionAndOpenTarget(packet.origin, () => send({ type: "open_target" }));
-    if (!response.ok) renderView(readyView(response.message ?? "无法打开目标站点"));
-    else renderView(loginRequiredView(packet.auth.compatible_family === "new-api"));
-  } catch (error) {
-    renderView(readyView(error instanceof Error ? error.message : "无法申请目标站点临时权限"));
-  }
-}
-
-async function extractAndSubmit(): Promise<void> {
-  const packet = currentPacket;
-  if (!packet) return renderView(waitingView("没有活动恢复会话。"));
-  const canGenerateSystemToken = packet.auth.compatible_family === "new-api";
-  renderView(submittingView(canGenerateSystemToken));
-  try {
-    const response = await runWithTargetPermission(packet.origin, () => send({ type: "extract_and_submit" }));
-    const result = response.result;
-    if (!response.ok && !result) renderView(retryExtractionView("操作失败", response.message ?? "扩展操作失败", "重新授权并提取"));
-    else if (result?.kind === "candidate") { currentPacket = undefined; renderView(candidateDeliveredView()); }
-    else if (result?.kind === "manual_required") renderView(retryExtractionView("需要手动创建令牌", result.message, "令牌准备好后重新提取"));
-    else if (result?.kind === "not_logged_in") renderView(retryExtractionView("尚未完成登录", result.message, canGenerateSystemToken ? "生成/读取系统令牌并验证" : "我已完成登录，重新提取"));
-    else if (result) renderView(retryExtractionView("提取失败", result.message));
-  } catch (error) {
-    renderView(retryExtractionView("无法访问目标站点", error instanceof Error ? error.message : "无法确认临时权限", "重新授权并提取"));
-  }
-}
-
 async function runPrimaryAction(): Promise<void> {
   if (primaryAction === "capture") return captureActiveSession();
-  if (primaryAction === "grant") return grantAndOpen();
-  if (primaryAction === "extract") return extractAndSubmit();
   if (primaryAction === "confirm_rebind") {
     const response = await send({ type: "confirm_binding_replacement" });
     if (!response.ok) renderView(waitingView(response.message)); else void refreshActiveContext();
@@ -261,7 +212,7 @@ async function runPrimaryAction(): Promise<void> {
   }
   if (!currentOrigin) return;
   if (primaryAction === "generate_direct") {
-    renderView({ status: "正在生成并验证", detail: "同一捕获只会调用一次系统令牌生成接口。", primaryAction: null, primaryLabel: "正在处理", primaryDisabled: true });
+    renderView(submittingView(true));
     const response = await runWithTargetPermission(currentOrigin, () => send({ type: "generate_direct_token", origin: currentOrigin! }));
     const resultMessage = response.result && response.result.kind !== "candidate" ? response.result.message : undefined;
     if (response.capture) renderCapture(response.capture); else renderView(waitingView(response.message ?? resultMessage));
@@ -291,21 +242,26 @@ secondaryButton.addEventListener("click", () => {
 
 discardButton.addEventListener("click", async () => {
   if (currentCapture && currentOrigin) {
-    const response = await send({ type: "cancel_direct_capture", origin: currentOrigin, capture_id: currentCapture.capture_id });
-    if (response.capture) renderCapture(response.capture);
+    if (["completed", "canceled", "failed", "conflict", "expired"].includes(currentCapture.phase)) {
+      await send({ type: "clear_direct_session", origin: currentOrigin });
+      clearContextDisplay();
+      renderView(waitingView("当前站点的临时导入状态已清理，Octopus 绑定保持不变。"));
+    } else {
+      const response = await send({ type: "cancel_direct_capture", origin: currentOrigin, capture_id: currentCapture.capture_id });
+      if (response.capture) renderCapture(response.capture);
+    }
     return;
   }
-  await send({ type: "discard_session" });
-  clearPacketDisplay();
-  renderView(waitingView("会话和临时站点权限已清理。"));
+  if (currentOrigin) await send({ type: "clear_direct_session", origin: currentOrigin });
+  clearContextDisplay();
+  renderView(waitingView("当前站点的临时导入状态已清理，Octopus 绑定保持不变。"));
 });
 
 chrome.runtime.onMessage.addListener((event: SessionEvent) => {
-  if (event.type === "session_updated") renderPacket(event.packet);
-  else if (event.type === "session_error") renderView(waitingView(event.message));
+  if (event.type === "operation_error") renderView(waitingView(event.message));
   else if (event.type === "binding_updated") void refreshActiveContext();
   else if (event.type === "binding_replacement_required") {
-    clearPacketDisplay();
+    clearContextDisplay();
     renderView({ status: "确认更换 Octopus", detail: `当前：${event.current_origin}\n新地址：${event.next_origin}\n换绑后旧实例中的未完成捕获将被清理。`, primaryAction: "confirm_rebind", primaryLabel: "确认更换 Octopus", primaryDisabled: false });
   } else if (event.type === "direct_capture_updated" && event.origin === currentOrigin) renderCapture(event.capture);
   else if (event.type === "direct_capture_manual_required" && event.origin === currentOrigin) {

@@ -160,38 +160,6 @@ export type PlatformAuthCapability = {
   };
 };
 
-export type RecoveryCandidateSummary = {
-  credential_type: SiteCredentialType;
-  access_token_mask: string;
-  has_refresh_token: boolean;
-  token_expires_at?: number;
-  platform_user_id?: number | null;
-  identity_label?: string;
-  identity_changed: boolean;
-};
-
-export type RecoverySession = {
-  id: string;
-  account_id: number;
-  site_id: number;
-  origin: string;
-  platform: SitePlatform;
-  phase:
-    | "awaiting_login"
-    | "validating"
-    | "candidate_ready"
-    | "verification_failed"
-    | "confirming"
-    | "completed"
-    | "canceled";
-  expires_at: string;
-  capability?: string;
-  auth: PlatformAuthCapability;
-  candidate?: RecoveryCandidateSummary;
-  error_code?: string;
-  error_message?: string;
-};
-
 export type Site = {
   id: number;
   name: string;
@@ -549,58 +517,6 @@ export function useCheckinSiteAccount() {
       ),
     onSuccess: () => invalidateSiteQueries(queryClient),
     onError: (error) => logger.error("站点账号签到失败:", error),
-  });
-}
-
-export function useCreateSiteAuthRecovery() {
-  return useMutation({
-    mutationFn: async (accountId: number) =>
-      apiClient.post<RecoverySession>(
-        `/api/v1/site/account/${accountId}/auth-recovery`,
-        {},
-      ),
-    onError: (error) => logger.error("创建账号恢复会话失败:", error),
-  });
-}
-
-export function useSiteAuthRecovery(sessionId: string | null, enabled = true) {
-  return useQuery({
-    queryKey: ["sites", "auth-recovery", sessionId],
-    queryFn: async () =>
-      apiClient.get<RecoverySession>(
-        `/api/v1/site/auth-recovery/${sessionId}`,
-      ),
-    enabled: enabled && Boolean(sessionId),
-    refetchInterval: (query) => {
-      const phase = query.state.data?.phase;
-      return phase === "awaiting_login" || phase === "validating" ? 2_000 : false;
-    },
-  });
-}
-
-export function useConfirmSiteAuthRecovery() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (sessionId: string) =>
-      apiClient.post<RecoverySession>(
-        `/api/v1/site/auth-recovery/${sessionId}/confirm`,
-        {},
-      ),
-    onSuccess: () => invalidateSiteQueries(queryClient),
-    onError: (error) => logger.error("确认账号恢复失败:", error),
-  });
-}
-
-export function useCancelSiteAuthRecovery() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (sessionId: string) =>
-      apiClient.post<RecoverySession>(
-        `/api/v1/site/auth-recovery/${sessionId}/cancel`,
-        {},
-      ),
-    onSuccess: () => invalidateSiteQueries(queryClient),
-    onError: (error) => logger.error("取消账号恢复失败:", error),
   });
 }
 

@@ -1057,16 +1057,7 @@
             },
             "platform": {
                 "detect_inconclusive": "The site platform could not be identified reliably. Select it manually.",
-                "incompatible": "The site does not provide the required authentication recovery capability."
-            },
-            "recovery": {
-                "not_found": "The recovery session does not exist or has expired.",
-                "expired": "The recovery session has expired. Create a new one.",
-                "invalid": "The recovery candidate is invalid. Create a new session.",
-                "forbidden": "Recovery session verification failed. Create a new session.",
-                "replay": "This recovery capability has already been used and cannot be submitted again.",
-                "conflict": "The account or recovery session changed. Start again.",
-                "rate_limited": "Too many recovery requests were sent. Try again later."
+                "incompatible": "The site does not provide the required authentication capability."
             },
             "upstream": {
                 "http_error": "The upstream site request failed (HTTP {statusCode}). Check the site status or try again later.",

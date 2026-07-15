@@ -1057,16 +1057,7 @@
             },
             "platform": {
                 "detect_inconclusive": "無法可靠識別站點平台，請手動選擇。",
-                "incompatible": "該站點不支援所需的認證恢復能力。"
-            },
-            "recovery": {
-                "not_found": "恢復工作階段不存在或已經過期。",
-                "expired": "恢復工作階段已經過期，請重新建立。",
-                "invalid": "恢復候選資料無效，請重新建立工作階段。",
-                "forbidden": "恢復工作階段校驗失敗，請重新建立。",
-                "replay": "該恢復 capability 已經使用，不能重複提交。",
-                "conflict": "帳號或恢復工作階段已發生變化，請重新開始。",
-                "rate_limited": "恢復請求過於頻繁，請稍後重試。"
+                "incompatible": "該站點不支援所需的認證能力。"
             },
             "upstream": {
                 "http_error": "站點上游請求失敗（HTTP {statusCode}），請檢查站點狀態或稍後重試。",

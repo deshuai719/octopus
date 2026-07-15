@@ -70,7 +70,6 @@ import { CheckinPanel } from "./CheckinPanel";
 import { SiteEditDialog } from "./SiteEditDialog";
 import { BatchEditDialog } from "./BatchEditDialog";
 import { AccountEditDialog } from "./AccountEditDialog";
-import { AuthRecoveryDialog } from "./AuthRecoveryDialog";
 import {
   accountHasCheckinEnabled,
   accountMatchesCheckinFilters,
@@ -93,7 +92,6 @@ import {
   CircleAlert,
   FileJson,
   FilterX,
-  KeyRound,
   Link2,
   MoreHorizontal,
   Pencil,
@@ -623,10 +621,6 @@ export function Site() {
   const [editingAccount, setEditingAccount] = useState<SiteAccount | null>(
     null,
   );
-  const [recoveryDialogOpen, setRecoveryDialogOpen] = useState(false);
-  const [recoverySite, setRecoverySite] = useState<SiteRecord | null>(null);
-  const [recoveryAccount, setRecoveryAccount] = useState<SiteAccount | null>(null);
-
   // Batch selection
   const [selectedSiteIds, setSelectedSiteIds] = useState<number[]>([]);
   const [batchEditOpen, setBatchEditOpen] = useState(false);
@@ -979,28 +973,6 @@ export function Site() {
     setAccountSite(site);
     setEditingAccount(account);
     setAccountDialogOpen(true);
-  }
-
-  function openRecoveryDialog(site: SiteRecord, account: SiteAccount) {
-    setRecoverySite(site);
-    setRecoveryAccount(account);
-    setRecoveryDialogOpen(true);
-  }
-
-  function closeRecoveryDialog(open: boolean) {
-    setRecoveryDialogOpen(open);
-    if (!open) {
-      setRecoverySite(null);
-      setRecoveryAccount(null);
-    }
-  }
-
-  function openRecoveryManualFallback() {
-    if (!recoverySite || !recoveryAccount) return;
-    const site = recoverySite;
-    const account = recoveryAccount;
-    closeRecoveryDialog(false);
-    openEditAccountDialog(site, account);
   }
 
   function closeAccountDialog(open: boolean) {
@@ -1863,16 +1835,6 @@ export function Site() {
                                             type="button"
                                             className={MENU_BUTTON_CLASS}
                                             onClick={() =>
-                                              openRecoveryDialog(site, account)
-                                            }
-                                          >
-                                            <KeyRound className="size-4" />
-                                            <span>使用扩展修复登录</span>
-                                          </button>
-                                          <button
-                                            type="button"
-                                            className={MENU_BUTTON_CLASS}
-                                            onClick={() =>
                                               openEditAccountDialog(site, account)
                                             }
                                           >
@@ -1904,12 +1866,12 @@ export function Site() {
                                       <button
                                         type="button"
                                         className="flex w-full items-center justify-between gap-3 rounded-xl border border-destructive/25 bg-destructive/5 px-3 py-2 text-left text-xs text-destructive"
-                                        onClick={() => openRecoveryDialog(site, account)}
+                                        onClick={() => openEditAccountDialog(site, account)}
                                       >
                                         <span className="truncate">
                                           {account.auth_failure_message || "登录凭据需要重新获取"}
                                         </span>
-                                        <span className="shrink-0 font-medium">修复登录</span>
+                                        <span className="shrink-0 font-medium">编辑账号</span>
                                       </button>
                                     ) : null}
                                     <ExecutionSummary
@@ -2209,14 +2171,6 @@ export function Site() {
         onOpenChange={closeAccountDialog}
         site={accountSite}
         account={editingAccount}
-      />
-
-      <AuthRecoveryDialog
-        open={recoveryDialogOpen}
-        onOpenChange={closeRecoveryDialog}
-        site={recoverySite}
-        account={recoveryAccount}
-        onManualFallback={openRecoveryManualFallback}
       />
 
       <Dialog

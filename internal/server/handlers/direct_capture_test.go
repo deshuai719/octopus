@@ -31,7 +31,7 @@ func TestDecodeStrictRecoveryJSONRejectsUnknownTrailingAndOversizedPayloads(t *t
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var candidate sitesync.DirectCaptureCandidate
-			if err := decodeStrictRecoveryJSON(directCaptureTestContext(test.body), &candidate); err == nil {
+			if err := decodeStrictSiteJSON(directCaptureTestContext(test.body), &candidate); err == nil {
 				t.Fatal("payload unexpectedly passed strict decoder")
 			}
 		})

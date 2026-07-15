@@ -85,7 +85,7 @@ func TestCreateAccountTokenCreatesManagedKeyAndSyncsAccount(t *testing.T) {
 		Name:           "managed-create-account",
 		CredentialType: model.SiteCredentialTypeAccessToken,
 		AccessToken:    "test-access-token",
-		PlatformUserID: intPointer(11494),
+		PlatformUserID: createKeyIntPointer(11494),
 		Enabled:        true,
 		AutoSync:       true,
 	}
@@ -124,6 +124,10 @@ func TestCreateAccountTokenCreatesManagedKeyAndSyncsAccount(t *testing.T) {
 	if len(reloaded.Models) != 1 || reloaded.Models[0].GroupKey != "vip" || reloaded.Models[0].ModelName != "gpt-4o-mini" {
 		t.Fatalf("unexpected synced models: %+v", reloaded.Models)
 	}
+}
+
+func createKeyIntPointer(value int) *int {
+	return &value
 }
 
 func TestCreateAccountTokenCreatesSub2APIKeyAndSyncsAccount(t *testing.T) {

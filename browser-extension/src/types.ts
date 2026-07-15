@@ -6,40 +6,7 @@ export type Platform =
   | "sub2api"
   | "anyrouter";
 
-export type CredentialField =
-  | "access_token"
-  | "refresh_token"
-  | "token_expires_at"
-  | "platform_user_id";
-
-export type AuthCapability = {
-  compatible_family: "new-api" | "sub2api" | "anyrouter";
-  required_fields: CredentialField[];
-  extractable_fields: CredentialField[];
-  recovery_guide: {
-    title: string;
-    steps: string[];
-    manual_fallback: string;
-  };
-};
-
-export type RecoveryPacket = {
-  version: 1;
-  api_base_url: string;
-  session_id: string;
-  capability: string;
-  account_id: number;
-  site_id: number;
-  origin: string;
-  platform: Platform;
-  expires_at: string;
-  auth: AuthCapability;
-};
-
 export type CandidateCredential = {
-  account_id: number;
-  origin: string;
-  platform: Platform;
   access_token?: string;
   refresh_token?: string;
   token_expires_at?: number;
@@ -50,7 +17,7 @@ export type CandidateCredential = {
 export type ExtractResult =
   | {
       kind: "candidate";
-      candidate: Omit<CandidateCredential, "account_id" | "origin" | "platform">;
+      candidate: CandidateCredential;
       generated_system_token?: boolean;
     }
   | {
@@ -65,12 +32,7 @@ export type ExtractResult =
   | { kind: "error"; message: string };
 
 export type WorkerRequest =
-  | { type: "get_session" }
   | { type: "capture_active_session"; expected_origin: string }
-  | { type: "open_target" }
-  | { type: "extract_and_submit" }
-  | { type: "discard_session" }
-  | { type: "page_terminal"; session_id: string }
   | { type: "get_active_context"; origin?: string }
   | { type: "confirm_binding_replacement" }
   | { type: "generate_direct_token"; origin: string }
@@ -79,22 +41,21 @@ export type WorkerRequest =
   | { type: "resolve_direct_capture"; origin: string; capture_id: string; account_id?: number; create_new?: boolean }
   | { type: "cancel_direct_capture"; origin: string; capture_id: string }
   | { type: "retry_direct_sync"; origin: string; capture_id: string }
+  | { type: "clear_direct_session"; origin: string }
   | { type: "clear_diagnostics" };
 
 export type WorkerResponse = {
   ok: boolean;
-  packet?: RecoveryPacket;
   result?: ExtractResult;
   binding?: Omit<OctopusBinding, "token">;
   capture?: DirectCaptureView;
   origin?: string;
-  mode?: "legacy" | "binding" | "direct" | "unsupported";
+  mode?: "binding" | "direct" | "unsupported";
   message?: string;
 };
 
 export type SessionEvent =
-  | { type: "session_updated"; packet: RecoveryPacket }
-  | { type: "session_error"; message: string }
+  | { type: "operation_error"; message: string }
   | { type: "binding_updated"; origin: string }
   | { type: "binding_replacement_required"; current_origin: string; next_origin: string }
   | { type: "direct_capture_updated"; origin: string; capture: DirectCaptureView }

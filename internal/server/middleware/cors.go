@@ -9,9 +9,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const RecoveryExtensionOrigin = "chrome-extension://hcnomejlhhefpnhljgcclhggoljokimn"
+const OctopusExtensionOrigin = "chrome-extension://hcnomejlhhefpnhljgcclhggoljokimn"
 
-const recoveryCandidatePathPrefix = "/api/v1/site/auth-recovery/"
 const directCapturePathPrefix = "/api/v1/site/direct-capture/"
 
 func Cors() gin.HandlerFunc {
@@ -63,21 +62,14 @@ func Cors() gin.HandlerFunc {
 		return false
 	}
 	config.AllowOriginWithContextFunc = func(c *gin.Context, origin string) bool {
-		return allowRecoveryExtensionOrigin(c.Request.URL.Path, origin)
+		return allowOctopusExtensionOrigin(c.Request.URL.Path, origin)
 	}
 	return cors.New(config)
 }
 
-func allowRecoveryExtensionOrigin(path string, origin string) bool {
-	if origin != RecoveryExtensionOrigin {
+func allowOctopusExtensionOrigin(path string, origin string) bool {
+	if origin != OctopusExtensionOrigin {
 		return false
 	}
-	if path == "/api/v1/user/status" || path == "/api/v1/site/direct-capture/preview" || strings.HasPrefix(path, directCapturePathPrefix) {
-		return true
-	}
-	if !strings.HasPrefix(path, recoveryCandidatePathPrefix) || !strings.HasSuffix(path, "/candidate") {
-		return false
-	}
-	sessionID := strings.TrimSuffix(strings.TrimPrefix(path, recoveryCandidatePathPrefix), "/candidate")
-	return sessionID != "" && !strings.Contains(sessionID, "/")
+	return path == "/api/v1/user/status" || strings.HasPrefix(path, directCapturePathPrefix)
 }

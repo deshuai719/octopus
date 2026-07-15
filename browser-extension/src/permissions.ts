@@ -1,4 +1,4 @@
-import { permissionPattern } from "./packet";
+import { permissionPattern } from "./binding";
 import type { WorkerResponse } from "./types";
 
 export async function runWithTargetPermission(
@@ -10,13 +10,6 @@ export async function runWithTargetPermission(
   return action();
 }
 
-export function grantPermissionAndOpenTarget(
-  origin: string,
-  openTarget: () => Promise<WorkerResponse>,
-): Promise<WorkerResponse> {
-  return runWithTargetPermission(origin, openTarget);
-}
-
 export async function runWithRoutedPagePermission(
   origin: string,
   action: () => Promise<WorkerResponse>,
@@ -26,7 +19,7 @@ export async function runWithRoutedPagePermission(
   if (!granted) return { ok: false, message: "未获得当前页面临时权限" };
   try {
     // The worker owns the successful lifecycle: Octopus binding retains the
-    // origin, while direct capture and legacy recovery revoke it when done.
+    // origin, while direct capture revokes temporary site permissions when done.
     return await action();
   } catch (error) {
     const removed = await chrome.permissions.remove(permission);

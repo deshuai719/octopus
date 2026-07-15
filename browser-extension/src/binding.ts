@@ -20,6 +20,10 @@ export function canonicalHTTPOrigin(raw: string | undefined): string | undefined
   }
 }
 
+export function permissionPattern(origin: string): string {
+  return `${new URL(origin).origin}/*`;
+}
+
 export async function getOctopusBinding(): Promise<OctopusBinding | undefined> {
   const stored = await chrome.storage.local.get(OCTOPUS_BINDING_KEY);
   const value = stored[OCTOPUS_BINDING_KEY];

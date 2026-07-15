@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
@@ -103,7 +104,7 @@ func ValidateDirectCaptureCandidate(ctx context.Context, input DirectCaptureCand
 		return nil, directCaptureValidationError("direct_capture.identity.required", "authenticated user id could not be verified", false, "login_again")
 	}
 	if input.PlatformUserID == nil && verifiedUserID > 0 {
-		input.PlatformUserID = cloneInt(&verifiedUserID)
+		input.PlatformUserID = cloneDirectCaptureInt(&verifiedUserID)
 	}
 
 	evidenceCodes := append(browserEvidence, "server.authenticated_profile."+string(input.Platform))
@@ -113,11 +114,27 @@ func ValidateDirectCaptureCandidate(ctx context.Context, input DirectCaptureCand
 		AccessToken:     accessToken,
 		RefreshToken:    refreshToken,
 		TokenExpiresAt:  input.TokenExpiresAt,
-		PlatformUserID:  cloneInt(input.PlatformUserID),
+		PlatformUserID:  cloneDirectCaptureInt(input.PlatformUserID),
 		IdentityLabel:   identityLabel,
-		AccessTokenMask: maskRecoverySecret(accessToken),
+		AccessTokenMask: maskDirectCaptureSecret(accessToken),
 		EvidenceCodes:   evidenceCodes,
 	}, nil
+}
+
+func cloneDirectCaptureInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func maskDirectCaptureSecret(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) <= 8 {
+		return "**** (" + strconv.Itoa(len(trimmed)) + " chars)"
+	}
+	return trimmed[:4] + "…" + trimmed[len(trimmed)-4:] + " (" + strconv.Itoa(len(trimmed)) + " chars)"
 }
 
 func validateDirectCaptureEvidence(platform model.SitePlatform, evidence []DirectCaptureEvidence) ([]string, error) {

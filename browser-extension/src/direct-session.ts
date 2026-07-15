@@ -1,6 +1,7 @@
 import type { DirectCaptureView, Platform, PlatformEvidence } from "./types";
 
 const DIRECT_CAPTURE_INDEX_KEY = "octopusDirectCaptureIndexV1";
+const REMOVABLE_DIRECT_PHASES = new Set(["canceled", "failed", "conflict", "expired"]);
 
 export type DirectSessionIndexItem = {
   origin: string;
@@ -44,6 +45,10 @@ export async function removeDirectSession(origin: string): Promise<void> {
   const index = await readIndex();
   delete index[origin];
   await writeIndex(index);
+}
+
+export function shouldRemoveDirectSession(phase: string): boolean {
+  return REMOVABLE_DIRECT_PHASES.has(phase);
 }
 
 export async function claimDirectTokenGeneration(origin: string, operationID: string): Promise<boolean> {

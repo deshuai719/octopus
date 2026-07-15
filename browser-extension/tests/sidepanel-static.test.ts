@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 const sidepanelCSS = readFileSync(new URL("../static/sidepanel.css", import.meta.url), "utf8");
 const sidepanelHTML = readFileSync(new URL("../static/sidepanel.html", import.meta.url), "utf8");
 const sidepanelScript = readFileSync(new URL("../src/sidepanel.ts", import.meta.url), "utf8");
+const panelStateScript = readFileSync(new URL("../src/panel-state.ts", import.meta.url), "utf8");
 
 describe("side panel visibility contract", () => {
   it("keeps hidden phase-specific controls out of layout", () => {
@@ -29,5 +30,11 @@ describe("side panel visibility contract", () => {
     expect(sidepanelScript).toContain('matchedAccount.textContent = "—"');
     expect(sidepanelScript).toContain('siteNameInput.value = ""');
     expect(sidepanelScript).toContain('accountNameInput.value = ""');
+  });
+
+  it("contains no legacy recovery user flow", () => {
+    for (const source of [sidepanelHTML, sidepanelScript, panelStateScript]) {
+      expect(source).not.toMatch(/恢复页面|恢复会话|recovery capability/i);
+    }
   });
 });
