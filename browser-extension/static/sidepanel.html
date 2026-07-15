@@ -31,6 +31,27 @@
               <code id="target-origin">—</code>
             </div>
           </div>
+          <section id="transfer-progress" class="transfer-progress" aria-live="polite" hidden>
+            <p class="section-label">本次传输进度</p>
+            <ol class="progress-list">
+              <li data-progress-step="detected" data-state="pending">
+                <span class="progress-index" aria-hidden="true">1</span>
+                <span class="progress-copy"><strong>识别站点</strong><small>等待中</small></span>
+              </li>
+              <li data-progress-step="previewed" data-state="pending">
+                <span class="progress-index" aria-hidden="true">2</span>
+                <span class="progress-copy"><strong>预览已送达</strong><small>等待中</small></span>
+              </li>
+              <li data-progress-step="saved" data-state="pending">
+                <span class="progress-index" aria-hidden="true">3</span>
+                <span class="progress-copy"><strong>账号已保存</strong><small>等待中</small></span>
+              </li>
+              <li data-progress-step="synced" data-state="pending">
+                <span class="progress-index" aria-hidden="true">4</span>
+                <span class="progress-copy"><strong>同步完成</strong><small>等待中</small></span>
+              </li>
+            </ol>
+          </section>
           <div id="direct-preview" class="direct-preview" hidden>
             <div class="preview-row"><span>操作</span><strong id="capture-action">—</strong></div>
             <div class="preview-row"><span>凭据</span><code id="credential-mask">—</code></div>
@@ -55,6 +76,15 @@
             </label>
             <button id="manual-token-action" class="secondary" hidden>使用此令牌继续</button>
             <p id="capture-warning" class="warning" hidden></p>
+            <section id="transfer-receipt" class="transfer-receipt" aria-live="polite" hidden>
+              <p class="section-label">本次结果</p>
+              <div class="receipt-row"><span>操作</span><strong id="receipt-action">—</strong></div>
+              <div class="receipt-row"><span>站点</span><strong id="receipt-site">—</strong></div>
+              <div class="receipt-row"><span>账号</span><strong id="receipt-account">—</strong></div>
+              <div class="receipt-row"><span>保存结果</span><strong id="receipt-saved">—</strong></div>
+              <div class="receipt-row"><span>同步结果</span><strong id="receipt-synced">—</strong></div>
+              <p id="receipt-message" class="receipt-message"></p>
+            </section>
           </div>
         </div>
       </section>

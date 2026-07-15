@@ -30,6 +30,20 @@ describe("side panel visibility contract", () => {
     expect(sidepanelScript).toContain('matchedAccount.textContent = "—"');
     expect(sidepanelScript).toContain('siteNameInput.value = ""');
     expect(sidepanelScript).toContain('accountNameInput.value = ""');
+    expect(sidepanelScript).toContain("clearTransferProgress();");
+    expect(sidepanelScript).toContain("clearTransferReceipt();");
+  });
+
+  it("renders a four-step transfer progress and a non-sensitive result receipt", () => {
+    for (const step of ["detected", "previewed", "saved", "synced"]) {
+      expect(sidepanelHTML).toContain(`data-progress-step="${step}"`);
+    }
+    for (const field of ["receipt-action", "receipt-site", "receipt-account", "receipt-saved", "receipt-synced", "receipt-message"]) {
+      expect(sidepanelHTML).toContain(`id="${field}"`);
+    }
+    expect(sidepanelScript).toContain("renderTransferProgress(capture.phase)");
+    expect(sidepanelScript).toContain("renderTransferReceipt(capture)");
+    expect(sidepanelScript).toContain("账号和凭据尚未写入");
   });
 
   it("contains no legacy recovery user flow", () => {

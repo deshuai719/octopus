@@ -3,6 +3,7 @@ import { runWithRoutedPagePermission, runWithTargetPermission } from "./permissi
 import { clearDiagnostics, formatDiagnostics, listDiagnostics } from "./diagnostics";
 import { readingView, submittingView, waitingView } from "./panel-state";
 import type { PanelPrimaryAction, PanelView } from "./panel-state";
+import { captureActionLabel, captureReceiptFor, transferProgressForPhase } from "./capture-progress";
 import type { DirectCaptureView, SessionEvent, WorkerRequest, WorkerResponse } from "./types";
 
 const status = document.querySelector<HTMLElement>("#status")!;
@@ -16,6 +17,18 @@ const discardButton = document.querySelector<HTMLButtonElement>("#discard")!;
 const copyDiagnosticsButton = document.querySelector<HTMLButtonElement>("#copy-diagnostics")!;
 const clearDiagnosticsButton = document.querySelector<HTMLButtonElement>("#clear-diagnostics")!;
 const directPreview = document.querySelector<HTMLElement>("#direct-preview")!;
+const transferProgress = document.querySelector<HTMLElement>("#transfer-progress")!;
+const transferProgressItems = new Map(
+  Array.from(transferProgress.querySelectorAll<HTMLElement>("[data-progress-step]"))
+    .map((item): [string, HTMLElement] => [item.dataset.progressStep ?? "", item]),
+);
+const transferReceipt = document.querySelector<HTMLElement>("#transfer-receipt")!;
+const receiptAction = document.querySelector<HTMLElement>("#receipt-action")!;
+const receiptSite = document.querySelector<HTMLElement>("#receipt-site")!;
+const receiptAccount = document.querySelector<HTMLElement>("#receipt-account")!;
+const receiptSaved = document.querySelector<HTMLElement>("#receipt-saved")!;
+const receiptSynced = document.querySelector<HTMLElement>("#receipt-synced")!;
+const receiptMessage = document.querySelector<HTMLElement>("#receipt-message")!;
 const captureAction = document.querySelector<HTMLElement>("#capture-action")!;
 const credentialMask = document.querySelector<HTMLElement>("#credential-mask")!;
 const platformUserID = document.querySelector<HTMLElement>("#platform-user-id")!;
@@ -52,9 +65,60 @@ function renderView(view: PanelView): void {
   secondaryButton.hidden = true;
 }
 
+function clearTransferProgress(): void {
+  transferProgress.hidden = true;
+  for (const item of transferProgressItems.values()) {
+    item.dataset.state = "pending";
+    item.removeAttribute("aria-current");
+    const statusText = item.querySelector<HTMLElement>("small");
+    if (statusText) statusText.textContent = "等待中";
+  }
+}
+
+function renderTransferProgress(phase: string): void {
+  transferProgress.hidden = false;
+  for (const step of transferProgressForPhase(phase)) {
+    const item = transferProgressItems.get(step.key);
+    if (!item) continue;
+    item.dataset.state = step.state;
+    if (step.state === "active") item.setAttribute("aria-current", "step");
+    else item.removeAttribute("aria-current");
+    const label = item.querySelector<HTMLElement>("strong");
+    const statusText = item.querySelector<HTMLElement>("small");
+    if (label) label.textContent = step.label;
+    if (statusText) statusText.textContent = step.status;
+  }
+}
+
+function clearTransferReceipt(): void {
+  transferReceipt.hidden = true;
+  transferReceipt.dataset.state = "";
+  receiptAction.textContent = "—";
+  receiptSite.textContent = "—";
+  receiptAccount.textContent = "—";
+  receiptSaved.textContent = "—";
+  receiptSynced.textContent = "—";
+  receiptMessage.textContent = "";
+}
+
+function renderTransferReceipt(capture: DirectCaptureView): void {
+  const receipt = captureReceiptFor(capture);
+  if (!receipt) return clearTransferReceipt();
+  transferReceipt.hidden = false;
+  transferReceipt.dataset.state = capture.phase === "sync_failed" ? "failed" : capture.phase === "completed" ? "complete" : "active";
+  receiptAction.textContent = receipt.action;
+  receiptSite.textContent = receipt.site;
+  receiptAccount.textContent = receipt.account;
+  receiptSaved.textContent = receipt.saved;
+  receiptSynced.textContent = receipt.synced;
+  receiptMessage.textContent = receipt.message;
+}
+
 function clearDirectPreview(): void {
   currentCapture = undefined;
   directPreview.hidden = true;
+  clearTransferProgress();
+  clearTransferReceipt();
   siteNameField.hidden = true;
   accountNameField.hidden = true;
   accountResolutionField.hidden = true;
@@ -74,15 +138,6 @@ function clearDirectPreview(): void {
 function showManualTokenInput(): void {
   manualTokenField.hidden = false;
   manualTokenButton.hidden = false;
-}
-
-function captureActionLabel(action: string | undefined): string {
-  switch (action) {
-    case "create_site_account": return "新建站点和账号";
-    case "create_account": return "为已有站点新增账号";
-    case "update_account": return "更新已有账号";
-    default: return "等待确认";
-  }
 }
 
 function renderCapture(capture: DirectCaptureView): void {
@@ -118,6 +173,8 @@ function renderCapture(capture: DirectCaptureView): void {
   if (capture.credential_migration) warnings.push("确认后凭据将从用户名密码切换为访问令牌，旧密码会被清除。");
   captureWarning.textContent = warnings.join(" ");
   captureWarning.hidden = warnings.length === 0;
+  renderTransferProgress(capture.phase);
+  renderTransferReceipt(capture);
 
   switch (capture.phase) {
     case "resolution_required":
@@ -126,7 +183,7 @@ function renderCapture(capture: DirectCaptureView): void {
       secondaryButton.textContent = "创建新账号";
       break;
     case "preview_ready":
-      renderView({ status: "等待确认", detail: "请核对脱敏摘要。只有点击确认后才会写入 Octopus。", primaryAction: "confirm_direct", primaryLabel: "确认创建或更新", primaryDisabled: false });
+      renderView({ status: "预览已送达，等待确认", detail: "Octopus 已收到并验证脱敏预览；账号和凭据尚未写入。只有点击确认后才会保存。", primaryAction: "confirm_direct", primaryLabel: "确认创建或更新", primaryDisabled: false });
       break;
     case "saved_syncing":
       renderView({ status: "账号已保存", detail: "凭据已安全保存，正在后台执行完整同步。", primaryAction: null, primaryLabel: "正在同步", primaryDisabled: true });
@@ -194,11 +251,14 @@ async function refreshActiveContext(): Promise<void> {
 async function captureActiveSession(): Promise<void> {
   const expectedOrigin = capturePageOrigin;
   if (!expectedOrigin) return renderView(waitingView("当前标签页不是可访问的 HTTP(S) 页面。"));
+  clearDirectPreview();
+  renderTransferProgress("reading");
   renderView(readingView());
   try {
     const response = await runWithRoutedPagePermission(expectedOrigin, () => send({ type: "capture_active_session", expected_origin: expectedOrigin }));
     renderActiveContextResponse(response);
   } catch (error) {
+    renderTransferProgress("capture_failed");
     renderView(waitingView(error instanceof Error ? error.message : "无法读取当前标签页"));
   }
 }
@@ -220,15 +280,28 @@ async function runPrimaryAction(): Promise<void> {
   }
   if (!currentCapture) return;
   if (primaryAction === "confirm_direct") {
+    renderTransferProgress("saving");
+    clearTransferReceipt();
+    renderView({ status: "正在保存账号", detail: "正在确认写入 Octopus；完成前请勿重复点击。", primaryAction: null, primaryLabel: "正在保存", primaryDisabled: true });
     const response = await send({ type: "confirm_direct_capture", origin: currentOrigin, capture_id: currentCapture.capture_id, preview_version: currentCapture.preview_version ?? "", site_name: siteNameInput.value.trim() || undefined, account_name: accountNameInput.value.trim() || undefined });
-    if (response.capture) renderCapture(response.capture); else renderView(waitingView(response.message));
+    if (response.capture) renderCapture(response.capture);
+    else {
+      renderTransferProgress("save_failed");
+      renderView(waitingView(response.message));
+    }
   } else if (primaryAction === "resolve_direct") {
     const accountID = Number(accountResolution.value);
     const response = await send({ type: "resolve_direct_capture", origin: currentOrigin, capture_id: currentCapture.capture_id, account_id: Number.isSafeInteger(accountID) ? accountID : undefined });
     if (response.capture) renderCapture(response.capture); else renderView(waitingView(response.message));
   } else if (primaryAction === "retry_sync") {
+    renderTransferProgress("retrying_sync");
+    renderView({ status: "正在重试同步", detail: "账号已经保存；本次只重试同步，不会再次写入凭据。", primaryAction: null, primaryLabel: "正在同步", primaryDisabled: true });
     const response = await send({ type: "retry_direct_sync", origin: currentOrigin, capture_id: currentCapture.capture_id });
-    if (response.capture) renderCapture(response.capture); else renderView(waitingView(response.message));
+    if (response.capture) renderCapture(response.capture);
+    else {
+      renderTransferProgress("sync_failed");
+      renderView(waitingView(response.message));
+    }
   }
 }
 
