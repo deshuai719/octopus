@@ -36,30 +36,28 @@ export const PLATFORM_STATUS_SIGNATURES: PlatformStatusSignature[] = [
   },
 ];
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  !!value && typeof value === "object" && !Array.isArray(value);
-
-const dataRecord = (payload: unknown): Record<string, unknown> | undefined => {
-  if (!isRecord(payload)) return undefined;
-  return isRecord(payload.data) ? payload.data : payload;
-};
-
-const isDoneHubPartialStatus = (status: Record<string, unknown>): boolean =>
-  Object.hasOwn(status, "linuxDo_oauth") && Object.hasOwn(status, "max_log_query_days");
-
-const isDoneHubGroupMap = (payload: unknown): boolean => {
-  if (!isRecord(payload) || payload.success !== true || !isRecord(payload.data)) return false;
-  const groups = Object.entries(payload.data);
-  if (groups.length === 0) return false;
-  return groups.every(([groupKey, rawGroup]) => {
-    if (!groupKey.trim() || !isRecord(rawGroup)) return false;
-    const name = typeof rawGroup.name === "string" ? rawGroup.name.trim() : "";
-    const symbol = typeof rawGroup.symbol === "string" ? rawGroup.symbol.trim() : "";
-    return !!name && !!symbol && (Object.hasOwn(rawGroup, "ratio") || Object.hasOwn(rawGroup, "dynamic_ratio"));
-  });
-};
-
 export async function detectCurrentPlatform(signatures: PlatformStatusSignature[]): Promise<PlatformDiscovery> {
+  // chrome.scripting.executeScript serializes func without module closures, so every
+  // runtime helper used by this injected function must remain inside its body.
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === "object" && !Array.isArray(value);
+  const dataRecord = (payload: unknown): Record<string, unknown> | undefined => {
+    if (!isRecord(payload)) return undefined;
+    return isRecord(payload.data) ? payload.data : payload;
+  };
+  const isDoneHubPartialStatus = (status: Record<string, unknown>): boolean =>
+    Object.hasOwn(status, "linuxDo_oauth") && Object.hasOwn(status, "max_log_query_days");
+  const isDoneHubGroupMap = (payload: unknown): boolean => {
+    if (!isRecord(payload) || payload.success !== true || !isRecord(payload.data)) return false;
+    const groups = Object.entries(payload.data);
+    if (groups.length === 0) return false;
+    return groups.every(([groupKey, rawGroup]) => {
+      if (!groupKey.trim() || !isRecord(rawGroup)) return false;
+      const name = typeof rawGroup.name === "string" ? rawGroup.name.trim() : "";
+      const symbol = typeof rawGroup.symbol === "string" ? rawGroup.symbol.trim() : "";
+      return !!name && !!symbol && (Object.hasOwn(rawGroup, "ratio") || Object.hasOwn(rawGroup, "dynamic_ratio"));
+    });
+  };
   const responseJSON = async (path: string, init: RequestInit = {}): Promise<unknown> => {
     try {
       const response = await fetch(new URL(path, location.origin), {

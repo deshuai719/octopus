@@ -106,6 +106,36 @@ describe("detectCurrentPlatform", () => {
     expect(requests.some((request) => request.path.startsWith("/api/token"))).toBe(false);
   });
 
+  it("remains self-contained when serialized for chrome.scripting.executeScript", async () => {
+    installPage();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/status") {
+        return new Response(JSON.stringify({
+          success: true,
+          data: { linuxDo_oauth: true, max_log_query_days: 30, system_name: "Renamed Relay" },
+        }), { status: 200 });
+      }
+      if (path === "/api/user_group_map") {
+        return new Response(JSON.stringify({
+          success: true,
+          data: {
+            default: { name: "default", symbol: "default", ratio: 1, dynamic_ratio: false },
+          },
+        }), { status: 200 });
+      }
+      return new Response("{}", { status: 401 });
+    }));
+
+    const injectedDetect = Function(`return (${detectCurrentPlatform.toString()})`)() as typeof detectCurrentPlatform;
+
+    await expect(injectedDetect(PLATFORM_STATUS_SIGNATURES)).resolves.toEqual({
+      platform: "done-hub",
+      evidence: [{ code: "browser.strong.status_group_schema.done-hub" }],
+      system_name: "Renamed Relay",
+    });
+  });
+
   it.each([
     ["malformed", { default: { name: "default" } }],
     ["empty", {}],
