@@ -33,6 +33,44 @@ func TestCreateAccountTokenRejectsOneAPIBeforeHTTPRequest(t *testing.T) {
 	}
 }
 
+func TestDoneHubAPIKeyCreateWorkflowsRejectBeforeHTTPRequest(t *testing.T) {
+	ctx := setupProjectTestDB(t)
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount.Add(1)
+		http.Error(w, "unexpected request", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	site := &model.Site{Name: "done-hub-api-key-create-test", Platform: model.SitePlatformDoneHub, BaseURL: server.URL, Enabled: true}
+	if err := op.SiteCreate(site, ctx); err != nil {
+		t.Fatalf("SiteCreate failed: %v", err)
+	}
+	account := &model.SiteAccount{
+		SiteID:         site.ID,
+		Name:           "model-only",
+		CredentialType: model.SiteCredentialTypeAPIKey,
+		APIKey:         "sk-model-only",
+		Enabled:        true,
+		AutoSync:       true,
+	}
+	if err := op.SiteAccountCreate(account, ctx); err != nil {
+		t.Fatalf("SiteAccountCreate failed: %v", err)
+	}
+
+	_, singleErr := CreateAccountToken(ctx, site.ID, account.ID, model.SiteChannelKeyCreateRequest{GroupKey: "vip"})
+	if singleErr == nil || !strings.Contains(singleErr.Error(), string(model.SiteKeyCreateReasonCredentialAPIKeyReadOnly)) {
+		t.Fatalf("expected API Key read-only capability error, got %v", singleErr)
+	}
+	_, batchErr := CreateAllMissingAccountTokens(ctx, site.ID, account.ID)
+	if batchErr == nil || !strings.Contains(batchErr.Error(), string(model.SiteKeyCreateReasonCredentialAPIKeyReadOnly)) {
+		t.Fatalf("expected API Key read-only batch capability error, got %v", batchErr)
+	}
+	if got := requestCount.Load(); got != 0 {
+		t.Fatalf("Done Hub API Key capability rejection sent %d HTTP requests", got)
+	}
+}
+
 func TestCreateAccountTokenReturnsAlreadyExistsWithoutPOST(t *testing.T) {
 	ctx := setupProjectTestDB(t)
 	var postCount atomic.Int32

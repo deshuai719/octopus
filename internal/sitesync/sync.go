@@ -143,6 +143,9 @@ func buildManagedCheckinSignatureHeaders(account *model.SiteAccount, nonce strin
 
 func syncManagementPlatform(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount) (*syncSnapshot, error) {
 	if account.CredentialType == model.SiteCredentialTypeAPIKey {
+		if siteRecord.Platform == model.SitePlatformDoneHub {
+			return syncDoneHubWithAPIKey(ctx, siteRecord, account, resolveDirectToken(account), "manual")
+		}
 		return syncWithDirectToken(ctx, siteRecord, account, resolveDirectToken(account), "manual")
 	}
 
@@ -317,6 +320,18 @@ func syncOfficialPlatform(ctx context.Context, siteRecord *model.Site, account *
 }
 
 func syncWithDirectToken(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, token string, source string) (*syncSnapshot, error) {
+	return syncWithDirectTokenGroups(ctx, siteRecord, account, token, source, nil)
+}
+
+func syncDoneHubWithAPIKey(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, token string, source string) (*syncSnapshot, error) {
+	groups, err := fetchDoneHubPublicGroups(ctx, siteRecord, account)
+	if err != nil {
+		groups = append([]model.SiteUserGroup(nil), account.UserGroups...)
+	}
+	return syncWithDirectTokenGroups(ctx, siteRecord, account, token, source, groups)
+}
+
+func syncWithDirectTokenGroups(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, token string, source string, groups []model.SiteUserGroup) (*syncSnapshot, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return nil, newDirectTokenRequiredError()
@@ -350,7 +365,8 @@ func syncWithDirectToken(ctx context.Context, siteRecord *model.Site, account *m
 		baseGroupResult.Status = siteGroupSyncStatusEmpty
 		baseGroupResult.Message = "上游当前没有可用模型"
 	}
-	groupResults := finalizeSiteGroupSyncResults(account, []model.SiteUserGroup{{GroupKey: model.SiteDefaultGroupKey, Name: model.SiteDefaultGroupName}}, []model.SiteToken{groupToken}, siteModels, []siteGroupSyncResult{{
+	groups = mergeSiteGroups(groups, []model.SiteToken{groupToken})
+	groupResults := finalizeSiteGroupSyncResults(account, groups, []model.SiteToken{groupToken}, siteModels, []siteGroupSyncResult{{
 		GroupKey:      baseGroupResult.GroupKey,
 		GroupName:     baseGroupResult.GroupName,
 		HasKey:        baseGroupResult.HasKey,
@@ -362,7 +378,7 @@ func syncWithDirectToken(ctx context.Context, siteRecord *model.Site, account *m
 	status := buildSyncSnapshotStatus(groupResults)
 	snapshot := &syncSnapshot{
 		accessToken:  strings.TrimSpace(account.AccessToken),
-		groups:       []model.SiteUserGroup{{GroupKey: model.SiteDefaultGroupKey, Name: model.SiteDefaultGroupName}},
+		groups:       groups,
 		tokens:       []model.SiteToken{groupToken},
 		models:       siteModels,
 		groupResults: groupResults,

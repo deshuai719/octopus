@@ -4,12 +4,180 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/bestruirui/octopus/internal/apperror"
 	"github.com/bestruirui/octopus/internal/model"
 )
+
+func TestSyncDoneHubAPIKeyDiscoversPublicGroupsWithoutManagementCredentials(t *testing.T) {
+	groupRequests := 0
+	writeRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			writeRequests++
+		}
+		switch r.URL.Path {
+		case "/api/user_group_map":
+			groupRequests++
+			if r.Method != http.MethodGet || r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" || r.Header.Get("X-Site-Secret") != "" {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"success":false,"message":"public discovery carried credentials"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":{
+				"default":{"name":"default","symbol":"default","ratio":1,"dynamic_ratio":false},
+				"claude":{"name":"Claude","symbol":"claude","ratio":4,"dynamic_ratio":false},
+				"claude lite":{"name":"Claude Lite","symbol":"claude-lite","ratio":2,"dynamic_ratio":false},
+				"gemini":{"name":"Gemini","symbol":"gemini","ratio":1,"dynamic_ratio":false},
+				"gpt":{"name":"GPT","symbol":"gpt","ratio":1,"dynamic_ratio":false},
+				"gpt lite":{"name":"GPT Lite","symbol":"gpt-lite","ratio":1,"dynamic_ratio":false},
+				"grok":{"name":"Grok","symbol":"grok","ratio":1.5,"dynamic_ratio":false}
+			}}`))
+		case "/models", "/v1/models":
+			if r.Header.Get("Authorization") != "Bearer sk-model-only" {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4o-mini"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	snapshot, err := syncManagementPlatform(context.Background(), &model.Site{
+		Platform: model.SitePlatformDoneHub,
+		BaseURL:  server.URL,
+		CustomHeader: []model.CustomHeader{
+			{HeaderKey: "Authorization", HeaderValue: "Bearer must-not-leak"},
+			{HeaderKey: "X-Site-Secret", HeaderValue: "must-not-leak"},
+		},
+	}, &model.SiteAccount{
+		Name:           "model-only",
+		CredentialType: model.SiteCredentialTypeAPIKey,
+		APIKey:         "sk-model-only",
+		Enabled:        true,
+		AutoSync:       true,
+	})
+	if err != nil {
+		t.Fatalf("syncManagementPlatform returned error: %v", err)
+	}
+	if groupRequests != 1 || writeRequests != 0 {
+		t.Fatalf("groupRequests=%d writeRequests=%d", groupRequests, writeRequests)
+	}
+
+	groupKeys := make([]string, 0, len(snapshot.groups))
+	for _, group := range snapshot.groups {
+		groupKeys = append(groupKeys, group.GroupKey)
+	}
+	slices.Sort(groupKeys)
+	wantGroups := []string{"claude", "claude lite", "default", "gemini", "gpt", "gpt lite", "grok"}
+	if !slices.Equal(groupKeys, wantGroups) {
+		t.Fatalf("groups = %#v, want %#v", groupKeys, wantGroups)
+	}
+	if len(snapshot.tokens) != 1 || snapshot.tokens[0].GroupKey != model.SiteDefaultGroupKey || snapshot.tokens[0].Token != "sk-model-only" {
+		t.Fatalf("tokens = %+v", snapshot.tokens)
+	}
+	if len(snapshot.models) != 1 || snapshot.models[0].GroupKey != model.SiteDefaultGroupKey {
+		t.Fatalf("models = %+v", snapshot.models)
+	}
+	results := make(map[string]siteGroupSyncResult, len(snapshot.groupResults))
+	for _, result := range snapshot.groupResults {
+		results[result.GroupKey] = result
+	}
+	if results["default"].Status != siteGroupSyncStatusSynced {
+		t.Fatalf("default result = %+v", results["default"])
+	}
+	for _, groupKey := range []string{"claude", "claude lite", "gemini", "gpt", "gpt lite", "grok"} {
+		if results[groupKey].Status != siteGroupSyncStatusMissingKey || results[groupKey].HasKey {
+			t.Fatalf("result[%q] = %+v", groupKey, results[groupKey])
+		}
+	}
+}
+
+func TestSyncDoneHubAPIKeyPreservesHistoricalGroupsWhenPublicDiscoveryFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/user_group_map":
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"success":false,"message":"temporary failure"}`))
+		case "/models", "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4o-mini"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	snapshot, err := syncManagementPlatform(context.Background(), &model.Site{
+		Platform: model.SitePlatformDoneHub,
+		BaseURL:  server.URL,
+	}, &model.SiteAccount{
+		Name:           "model-only",
+		CredentialType: model.SiteCredentialTypeAPIKey,
+		APIKey:         "sk-model-only",
+		Enabled:        true,
+		AutoSync:       true,
+		UserGroups: []model.SiteUserGroup{
+			{GroupKey: "default", Name: "default"},
+			{GroupKey: "claude", Name: "Claude"},
+			{GroupKey: "gpt", Name: "GPT"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("syncManagementPlatform returned error: %v", err)
+	}
+	groupKeys := make([]string, 0, len(snapshot.groups))
+	for _, group := range snapshot.groups {
+		groupKeys = append(groupKeys, group.GroupKey)
+	}
+	slices.Sort(groupKeys)
+	if !slices.Equal(groupKeys, []string{"claude", "default", "gpt"}) {
+		t.Fatalf("historical groups were not preserved: %#v", groupKeys)
+	}
+}
+
+func TestSyncDoneHubAPIKeyFallsBackToDefaultWhenInitialPublicDiscoveryFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/user_group_map":
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"success":false,"message":"temporary failure"}`))
+		case "/models", "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4o-mini"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	snapshot, err := syncManagementPlatform(context.Background(), &model.Site{
+		Platform: model.SitePlatformDoneHub,
+		BaseURL:  server.URL,
+	}, &model.SiteAccount{
+		Name:           "model-only",
+		CredentialType: model.SiteCredentialTypeAPIKey,
+		APIKey:         "sk-model-only",
+		Enabled:        true,
+		AutoSync:       true,
+	})
+	if err != nil {
+		t.Fatalf("syncManagementPlatform returned error: %v", err)
+	}
+	if len(snapshot.groups) != 1 || snapshot.groups[0].GroupKey != model.SiteDefaultGroupKey {
+		t.Fatalf("groups = %+v, want default fallback", snapshot.groups)
+	}
+	if len(snapshot.tokens) != 1 || snapshot.tokens[0].GroupKey != model.SiteDefaultGroupKey {
+		t.Fatalf("tokens = %+v, want one default token", snapshot.tokens)
+	}
+}
 
 func TestSyncManagementPlatformDiscoversNewAPIUserID(t *testing.T) {
 	observedTokenUserHeader := ""

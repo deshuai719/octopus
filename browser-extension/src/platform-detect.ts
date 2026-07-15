@@ -36,9 +36,30 @@ export const PLATFORM_STATUS_SIGNATURES: PlatformStatusSignature[] = [
   },
 ];
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === "object" && !Array.isArray(value);
+
+const dataRecord = (payload: unknown): Record<string, unknown> | undefined => {
+  if (!isRecord(payload)) return undefined;
+  return isRecord(payload.data) ? payload.data : payload;
+};
+
+const isDoneHubPartialStatus = (status: Record<string, unknown>): boolean =>
+  Object.hasOwn(status, "linuxDo_oauth") && Object.hasOwn(status, "max_log_query_days");
+
+const isDoneHubGroupMap = (payload: unknown): boolean => {
+  if (!isRecord(payload) || payload.success !== true || !isRecord(payload.data)) return false;
+  const groups = Object.entries(payload.data);
+  if (groups.length === 0) return false;
+  return groups.every(([groupKey, rawGroup]) => {
+    if (!groupKey.trim() || !isRecord(rawGroup)) return false;
+    const name = typeof rawGroup.name === "string" ? rawGroup.name.trim() : "";
+    const symbol = typeof rawGroup.symbol === "string" ? rawGroup.symbol.trim() : "";
+    return !!name && !!symbol && (Object.hasOwn(rawGroup, "ratio") || Object.hasOwn(rawGroup, "dynamic_ratio"));
+  });
+};
+
 export async function detectCurrentPlatform(signatures: PlatformStatusSignature[]): Promise<PlatformDiscovery> {
-  const isRecord = (value: unknown): value is Record<string, unknown> =>
-    !!value && typeof value === "object" && !Array.isArray(value);
   const responseJSON = async (path: string, init: RequestInit = {}): Promise<unknown> => {
     try {
       const response = await fetch(new URL(path, location.origin), {
@@ -50,10 +71,6 @@ export async function detectCurrentPlatform(signatures: PlatformStatusSignature[
     } catch {
       return undefined;
     }
-  };
-  const dataRecord = (payload: unknown): Record<string, unknown> | undefined => {
-    if (!isRecord(payload)) return undefined;
-    return isRecord(payload.data) ? payload.data : payload;
   };
 
   const status = await responseJSON("/api/status");
@@ -74,6 +91,16 @@ export async function detectCurrentPlatform(signatures: PlatformStatusSignature[
     }
     if (matched.length > 1) {
       return { evidence: matched.map((item) => ({ code: `browser.conflict.status_schema.${item.platform}` })), system_name: systemName, reason: "variant_inconclusive" };
+    }
+    if (isRecord(status) && status.success === true && isDoneHubPartialStatus(statusData)) {
+      const groupMap = await responseJSON("/api/user_group_map", { credentials: "omit" });
+      if (isDoneHubGroupMap(groupMap)) {
+        return {
+          platform: "done-hub",
+          evidence: [{ code: "browser.strong.status_group_schema.done-hub" }],
+          system_name: systemName,
+        };
+      }
     }
   }
 
@@ -113,9 +140,9 @@ export async function detectCurrentPlatform(signatures: PlatformStatusSignature[
 
   const weakText = `${document.title}\n${systemName ?? ""}`.toLowerCase();
   const weakPatterns: Array<[Platform, RegExp]> = [
-    ["done-hub", /done[\s_-]*hub/],
-    ["one-hub", /one[\s_-]*hub/],
-    ["one-api", /one[\s_-]*api/],
+    ["done-hub", /\bdone[\s_-]*hub\b/],
+    ["one-hub", /\bone[\s_-]*hub\b/],
+    ["one-api", /\bone[\s_-]*api\b/],
     ["sub2api", /sub2api/],
     ["anyrouter", /anyrouter/],
     ["new-api", /new[\s_-]*api/],

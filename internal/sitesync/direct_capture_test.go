@@ -1,8 +1,11 @@
 package sitesync
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bestruirui/octopus/internal/apperror"
@@ -43,6 +46,118 @@ func TestDirectCaptureHTTPClientRejectsCredentialRedirectAcrossOrigin(t *testing
 	}
 }
 
+func TestProbeDirectCaptureStatusPlatformRecognizesDoneHubVariant(t *testing.T) {
+	var groupRequests atomic.Int32
+	var unsafeGroupRequest atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"linuxDo_oauth":true,"max_log_query_days":30}}`))
+		case "/api/user_group_map":
+			groupRequests.Add(1)
+			if r.Method != http.MethodGet || r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" {
+				unsafeGroupRequest.Store(true)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":{"default":{"name":"default","symbol":"default","ratio":1,"dynamic_ratio":false}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	platform, err := probeDirectCaptureStatusPlatformWithClient(context.Background(), server.URL, server.Client())
+	if err != nil {
+		t.Fatalf("probeDirectCaptureStatusPlatformWithClient() error = %v", err)
+	}
+	if platform != model.SitePlatformDoneHub {
+		t.Fatalf("platform = %q, want %q", platform, model.SitePlatformDoneHub)
+	}
+	if got := groupRequests.Load(); got != 1 {
+		t.Fatalf("groupRequests = %d, want 1", got)
+	}
+	if unsafeGroupRequest.Load() {
+		t.Fatal("public group probe used a write method or carried credentials")
+	}
+}
+
+func TestProbeDirectCaptureStatusPlatformRejectsMalformedDoneHubVariant(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"linuxDo_oauth":true,"max_log_query_days":30}}`))
+		case "/api/user_group_map":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"default":{"name":"default"}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	platform, err := probeDirectCaptureStatusPlatformWithClient(context.Background(), server.URL, server.Client())
+	if err != nil {
+		t.Fatalf("probeDirectCaptureStatusPlatformWithClient() error = %v", err)
+	}
+	if platform != "" {
+		t.Fatalf("platform = %q, want inconclusive", platform)
+	}
+}
+
+func TestProbeDirectCaptureStatusPlatformRejectsUnsuccessfulDoneHubStatus(t *testing.T) {
+	groupRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/status":
+			_, _ = w.Write([]byte(`{"success":false,"data":{"linuxDo_oauth":true,"max_log_query_days":30}}`))
+		case "/api/user_group_map":
+			groupRequests++
+			_, _ = w.Write([]byte(`{"success":true,"data":{"default":{"name":"default","symbol":"default","ratio":1}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	platform, err := probeDirectCaptureStatusPlatformWithClient(context.Background(), server.URL, server.Client())
+	if err != nil {
+		t.Fatalf("probeDirectCaptureStatusPlatformWithClient() error = %v", err)
+	}
+	if platform != "" {
+		t.Fatalf("platform = %q, want inconclusive", platform)
+	}
+	if groupRequests != 0 {
+		t.Fatalf("groupRequests = %d, want 0", groupRequests)
+	}
+}
+
+func TestProbeDirectCaptureProfileRequiresAuthenticatedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/user/self" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	_, err := probeDirectCaptureProfileWithClient(
+		context.Background(),
+		server.URL,
+		model.SitePlatformDoneHub,
+		"candidate-token",
+		nil,
+		[]string{"/api/user/self"},
+		server.Client(),
+	)
+	if !apperror.IsCode(err, "direct_capture.auth.invalid") {
+		t.Fatalf("error code = %q, want direct_capture.auth.invalid", apperror.Code(err))
+	}
+}
+
 func TestValidateDirectCaptureEvidenceRequiresStrongOrTwoMediumSignals(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -54,6 +169,11 @@ func TestValidateDirectCaptureEvidenceRequiresStrongOrTwoMediumSignals(t *testin
 			name:     "new api structural signature",
 			platform: model.SitePlatformNewAPI,
 			evidence: []DirectCaptureEvidence{{Code: "browser.strong.status_schema.new-api"}},
+		},
+		{
+			name:     "done hub status and group structural signature",
+			platform: model.SitePlatformDoneHub,
+			evidence: []DirectCaptureEvidence{{Code: "browser.strong.status_group_schema.done-hub"}},
 		},
 		{
 			name:     "brand is weak",

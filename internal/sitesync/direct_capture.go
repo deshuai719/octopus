@@ -158,6 +158,11 @@ func validateDirectCaptureEvidence(platform model.SitePlatform, evidence []Direc
 	if _, ok := seen[strongCode]; ok {
 		return result, nil
 	}
+	if platform == model.SitePlatformDoneHub {
+		if _, ok := seen["browser.strong.status_group_schema.done-hub"]; ok {
+			return result, nil
+		}
+	}
 	mediumCodes := map[model.SitePlatform][]string{
 		model.SitePlatformSub2API: {
 			"browser.medium.storage.sub2api_token_pair",
@@ -181,7 +186,10 @@ func validateDirectCaptureEvidence(platform model.SitePlatform, evidence []Direc
 }
 
 func probeDirectCaptureProfile(ctx context.Context, origin string, platform model.SitePlatform, accessToken string, userID *int, paths []string) (directCaptureProfile, error) {
-	client := directCaptureHTTPClient(origin)
+	return probeDirectCaptureProfileWithClient(ctx, origin, platform, accessToken, userID, paths, directCaptureHTTPClient(origin))
+}
+
+func probeDirectCaptureProfileWithClient(ctx context.Context, origin string, platform model.SitePlatform, accessToken string, userID *int, paths []string, client *http.Client) (directCaptureProfile, error) {
 	var lastErr error
 	for _, path := range paths {
 		if !strings.Contains(path, "user") && !strings.Contains(path, "profile") {
@@ -267,29 +275,54 @@ func verifyDirectCaptureServerEvidence(ctx context.Context, origin string, platf
 }
 
 func probeDirectCaptureStatusPlatform(ctx context.Context, origin string) (model.SitePlatform, error) {
-	client := directCaptureHTTPClient(origin)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, buildSiteURL(origin, "/api/status"), nil)
+	return probeDirectCaptureStatusPlatformWithClient(ctx, origin, directCaptureHTTPClient(origin))
+}
+
+func probeDirectCaptureStatusPlatformWithClient(ctx context.Context, origin string, client *http.Client) (model.SitePlatform, error) {
+	status, err := fetchDirectCapturePublicJSON(ctx, origin, "/api/status", client)
 	if err != nil {
 		return "", err
+	}
+	matched := matchDirectCaptureStatusPlatforms(status)
+	if len(matched) == 1 {
+		return matched[0], nil
+	}
+	if len(matched) > 0 || !isDoneHubPartialStatusPayload(status) {
+		return "", nil
+	}
+	groupMap, err := fetchDirectCapturePublicJSON(ctx, origin, "/api/user_group_map", client)
+	if err != nil {
+		return "", err
+	}
+	if isDoneHubGroupMapPayload(groupMap) {
+		return model.SitePlatformDoneHub, nil
+	}
+	return "", nil
+}
+
+func fetchDirectCapturePublicJSON(ctx context.Context, origin string, path string, client *http.Client) (map[string]any, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, buildSiteURL(origin, path), nil)
+	if err != nil {
+		return nil, err
 	}
 	request.Header.Set("Accept", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
-		return "", directCaptureValidationError("direct_capture.upstream.unreachable", "unable to verify platform status", true, "retry")
+		return nil, directCaptureValidationError("direct_capture.upstream.unreachable", "unable to verify platform evidence", true, "retry")
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", directCaptureValidationError("platform.variant.inconclusive", "platform status endpoint was not available", false, "manual_add")
+		return nil, directCaptureValidationError("platform.variant.inconclusive", "platform evidence endpoint was not available", false, "manual_add")
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, 64*1024+1))
 	if err != nil || len(body) > 64*1024 {
-		return "", directCaptureValidationError("direct_capture.upstream.too_large", "platform status response is invalid", false, "manual_add")
+		return nil, directCaptureValidationError("direct_capture.upstream.too_large", "platform evidence response is invalid", false, "manual_add")
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", directCaptureValidationError("platform.variant.inconclusive", "platform status response is invalid", false, "manual_add")
+		return nil, directCaptureValidationError("platform.variant.inconclusive", "platform evidence response is invalid", false, "manual_add")
 	}
-	return classifyDirectCaptureStatus(payload), nil
+	return payload, nil
 }
 
 func directCaptureHTTPClient(origin string) *http.Client {
@@ -309,6 +342,14 @@ func directCaptureHTTPClient(origin string) *http.Client {
 }
 
 func classifyDirectCaptureStatus(payload map[string]any) model.SitePlatform {
+	matched := matchDirectCaptureStatusPlatforms(payload)
+	if len(matched) != 1 {
+		return ""
+	}
+	return matched[0]
+}
+
+func matchDirectCaptureStatusPlatforms(payload map[string]any) []model.SitePlatform {
 	data := payload
 	if nested, ok := payload["data"].(map[string]any); ok {
 		data = nested
@@ -324,7 +365,7 @@ func classifyDirectCaptureStatus(payload map[string]any) model.SitePlatform {
 		{model.SitePlatformOneHub, []string{"oidc_auth", "language", "EnableSafe", "UptimeDomain"}, []string{"linuxDo_oauth", "max_log_query_days"}},
 		{model.SitePlatformOneAPI, []string{"oidc", "oidc_well_known", "oidc_token_endpoint"}, []string{"oidc_auth", "quota_display_type"}},
 	}
-	var matched model.SitePlatform
+	matched := make([]model.SitePlatform, 0, len(signatures))
 	for _, candidate := range signatures {
 		valid := true
 		for _, key := range candidate.required {
@@ -342,12 +383,47 @@ func classifyDirectCaptureStatus(payload map[string]any) model.SitePlatform {
 		if !valid {
 			continue
 		}
-		if matched != "" {
-			return ""
-		}
-		matched = candidate.platform
+		matched = append(matched, candidate.platform)
 	}
 	return matched
+}
+
+func isDoneHubPartialStatusPayload(payload map[string]any) bool {
+	if !jsonBool(payload["success"]) {
+		return false
+	}
+	data := payload
+	if nested, ok := payload["data"].(map[string]any); ok {
+		data = nested
+	}
+	_, hasLinuxDO := data["linuxDo_oauth"]
+	_, hasMaxLogDays := data["max_log_query_days"]
+	return hasLinuxDO && hasMaxLogDays
+}
+
+func isDoneHubGroupMapPayload(payload map[string]any) bool {
+	if !jsonBool(payload["success"]) {
+		return false
+	}
+	groups, ok := payload["data"].(map[string]any)
+	if !ok || len(groups) == 0 {
+		return false
+	}
+	for groupKey, rawGroup := range groups {
+		if strings.TrimSpace(groupKey) == "" {
+			return false
+		}
+		group, ok := rawGroup.(map[string]any)
+		if !ok || strings.TrimSpace(jsonString(group["name"])) == "" || strings.TrimSpace(jsonString(group["symbol"])) == "" {
+			return false
+		}
+		_, hasRatio := group["ratio"]
+		_, hasDynamicRatio := group["dynamic_ratio"]
+		if !hasRatio && !hasDynamicRatio {
+			return false
+		}
+	}
+	return true
 }
 
 func hasDirectCaptureIdentity(payload map[string]any) bool {

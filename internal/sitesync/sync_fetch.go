@@ -120,6 +120,30 @@ func fetchManagementGroups(ctx context.Context, siteRecord *model.Site, account 
 	return groups, nil
 }
 
+func fetchDoneHubPublicGroups(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount) ([]model.SiteUserGroup, error) {
+	if siteRecord == nil {
+		return nil, fmt.Errorf("site is nil")
+	}
+	publicSite := *siteRecord
+	publicSite.CustomHeader = nil
+	payload, err := requestJSON(ctx, &publicSite, http.MethodGet, buildSiteURL(siteRecord.BaseURL, "/api/user_group_map"), nil, nil, account)
+	if err != nil {
+		return nil, err
+	}
+	if success, ok := payload["success"]; ok && !jsonBool(success) {
+		return nil, fmt.Errorf("done hub public group discovery was not successful")
+	}
+	groups := parseGroupItems(payload)
+	if len(groups) == 0 {
+		return nil, fmt.Errorf("done hub public group discovery returned no groups")
+	}
+	rawPayload := marshalRawPayload(payload)
+	for index := range groups {
+		groups[index].RawPayload = rawPayload
+	}
+	return groups, nil
+}
+
 func fetchSub2APITokens(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, accessToken string) ([]model.SiteToken, error) {
 	endpoints := []string{"/api/v1/keys?page=1&page_size=100", "/api/v1/api-keys?page=1&page_size=100", "/api/v1/keys", "/api/v1/api-keys"}
 	var firstErr error
