@@ -212,11 +212,10 @@ func fetchAnyRouterManagementTokens(ctx context.Context, siteRecord *model.Site,
 	requestURL := buildSiteURL(siteRecord.BaseURL, "/api/token/?p=0&size=100")
 
 	payload, _, err := anyRouterRequestJSONWithCookies(ctx, siteRecord, http.MethodGet, requestURL, nil, anyRouterAuthHeaders(accessToken, userID), account)
-	if err != nil {
-		return nil, err
-	}
-	if tokens := buildSiteTokensFromPayload(payload); len(tokens) > 0 {
-		return tokens, nil
+	if err == nil {
+		if tokens := buildSiteTokensFromPayload(payload); len(tokens) > 0 {
+			return tokens, nil
+		}
 	}
 
 	cookieTokens, cookieErr := fetchAnyRouterTokensByCookie(ctx, siteRecord, account, accessToken, userID)
@@ -225,6 +224,9 @@ func fetchAnyRouterManagementTokens(ctx context.Context, siteRecord *model.Site,
 	}
 	if cookieErr != nil {
 		return nil, cookieErr
+	}
+	if err != nil {
+		return nil, err
 	}
 	return nil, nil
 }
@@ -821,7 +823,10 @@ func anyRouterRequestJSONWithCookies(ctx context.Context, siteRecord *model.Site
 		}
 
 		if payload, ok := anyRouterParseJSONObject(bodyBytes); ok {
-			return payload, cookieHeader, nil
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				return payload, cookieHeader, nil
+			}
+			return nil, cookieHeader, anyRouterFormatHTTPError(resp.StatusCode, resp.Header, string(bodyBytes))
 		}
 
 		text := strings.TrimSpace(string(bodyBytes))

@@ -116,6 +116,10 @@ func CancelRecoverySession(ctx context.Context, sessionID string, ownerToken str
 	return sitesync.CancelRecoverySession(ctx, sessionID, ownerToken)
 }
 
-func CreateAccountToken(ctx context.Context, accountID int, req model.SiteChannelKeyCreateRequest) (*model.SiteSyncResult, error) {
-	return sitesync.CreateAccountToken(ctx, accountID, req)
+func CreateAccountToken(ctx context.Context, siteID int, accountID int, req model.SiteChannelKeyCreateRequest) (*model.SiteKeyCreateResult, error) {
+	return sitesync.CreateAccountToken(ctx, siteID, accountID, req)
+}
+
+func CreateAllMissingAccountTokens(ctx context.Context, siteID int, accountID int) (*model.SiteKeyCreateBatchResult, error) {
+	return sitesync.CreateAllMissingAccountTokens(ctx, siteID, accountID)
 }

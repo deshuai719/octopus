@@ -123,6 +123,7 @@ func fetchManagementGroups(ctx context.Context, siteRecord *model.Site, account 
 func fetchSub2APITokens(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, accessToken string) ([]model.SiteToken, error) {
 	endpoints := []string{"/api/v1/keys?page=1&page_size=100", "/api/v1/api-keys?page=1&page_size=100", "/api/v1/keys", "/api/v1/api-keys"}
 	var firstErr error
+	requestSucceeded := false
 	for _, endpoint := range endpoints {
 		payload, err := requestJSON(ctx, siteRecord, "GET", buildSiteURL(siteRecord.BaseURL, endpoint), nil, map[string]string{"Authorization": ensureBearer(accessToken)}, account)
 		if err != nil {
@@ -138,11 +139,15 @@ func fetchSub2APITokens(ctx context.Context, siteRecord *model.Site, account *mo
 			}
 			continue
 		}
+		requestSucceeded = true
 		items := parseTokenItemsFromAny(data)
 		tokens := buildSub2APITokensFromItems(items)
 		if len(tokens) > 0 {
 			return tokens, nil
 		}
+	}
+	if requestSucceeded {
+		return nil, nil
 	}
 	if firstErr != nil {
 		return nil, firstErr

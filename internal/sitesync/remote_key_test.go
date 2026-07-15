@@ -100,3 +100,26 @@ func TestSub2APIRemoteTokenUpdateAndDelete(t *testing.T) {
 		t.Fatalf("expected update and delete calls, updated=%v deleted=%v", updated, deleted)
 	}
 }
+
+func TestSub2APIRemoteTokenDeleteAcceptsSuccessfulEnvelopeMessage(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/v1/api-keys/31" {
+			t.Fatalf("unexpected Sub2API delete request %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"code":0,"message":"删除成功"}`))
+	}))
+	defer server.Close()
+
+	siteRecord := &model.Site{Platform: model.SitePlatformSub2API, BaseURL: server.URL}
+	account := &model.SiteAccount{CredentialType: model.SiteCredentialTypeAccessToken, AccessToken: "sub2api-token"}
+	token := &model.SiteToken{ExternalID: 31}
+	if err := deleteSub2APIToken(context.Background(), siteRecord, account, token); err != nil {
+		t.Fatalf("expected successful Sub2API envelope to confirm deletion, got %v", err)
+	}
+	if requestCount != 1 {
+		t.Fatalf("expected one DELETE without compatibility replay, got %d", requestCount)
+	}
+}

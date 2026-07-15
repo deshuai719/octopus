@@ -139,6 +139,26 @@ export type SiteChannelAccount = {
     model_count: number;
     groups: SiteChannelGroup[];
     route_summaries: SiteRouteSummary[];
+    key_creation: SiteKeyCreateCapability;
+};
+
+export type SiteKeyCreateReasonCode =
+    | 'platform_not_supported'
+    | 'group_binding_not_supported'
+    | 'account_disabled'
+    | 'credential_api_key_read_only'
+    | 'credential_type_not_supported'
+    | 'credential_missing'
+    | 'platform_user_id_missing'
+    | 'reauth_required';
+
+export type SiteKeyCreateCapability = {
+    supported: boolean;
+    writable: boolean;
+    can_create_single: boolean;
+    can_create_all: boolean;
+    reason_code?: SiteKeyCreateReasonCode;
+    reason?: string;
 };
 
 export type SiteChannelCard = {
@@ -175,12 +195,13 @@ type SiteChannelGroupServer = Omit<SiteChannelGroup, 'models' | 'projected_chann
     models?: SiteChannelModelServer[] | null;
 };
 
-type SiteChannelAccountServer = Omit<SiteChannelAccount, 'groups' | 'route_summaries'> & {
+type SiteChannelAccountServer = Omit<SiteChannelAccount, 'groups' | 'route_summaries' | 'key_creation'> & {
     groups?: SiteChannelGroupServer[] | null;
     route_summaries?: Array<{
         route_type?: string | null;
         count?: number | null;
     }> | null;
+    key_creation?: Partial<SiteKeyCreateCapability> | null;
 };
 
 type SiteChannelCardServer = Omit<SiteChannelCard, 'accounts'> & {
@@ -336,6 +357,31 @@ function normalizeSiteChannelAccount(account: SiteChannelAccountServer): SiteCha
             route_type: normalizeSiteModelRouteType(summary.route_type),
             count: typeof summary.count === 'number' ? summary.count : 0,
         })),
+        key_creation: normalizeSiteKeyCreateCapability(account.key_creation),
+    };
+}
+
+function normalizeSiteKeyCreateCapability(
+    capability: Partial<SiteKeyCreateCapability> | null | undefined,
+): SiteKeyCreateCapability {
+    if (!capability) {
+        return {
+            supported: false,
+            writable: false,
+            can_create_single: false,
+            can_create_all: false,
+            reason: '后端未返回分组 Key 创建能力，请升级后端后重试',
+        };
+    }
+    return {
+        supported: capability.supported === true,
+        writable: capability.writable === true,
+        can_create_single: capability.can_create_single === true,
+        can_create_all: capability.can_create_all === true,
+        reason_code: capability.reason_code,
+        reason: typeof capability.reason === 'string' && capability.reason.trim()
+            ? capability.reason.trim()
+            : undefined,
     };
 }
 
@@ -389,6 +435,39 @@ export type SiteChannelModelDisabledMutationInput = {
 export type SiteChannelKeyCreateRequest = {
     group_key: string;
     name?: string;
+};
+
+export type SiteKeyCreateResult = {
+    status: 'created' | 'already_exists' | 'remote_created_sync_failed';
+    remote_applied: boolean;
+    sync_pending?: boolean;
+    message: string;
+    account?: SiteChannelAccount;
+};
+
+type SiteKeyCreateResultServer = Omit<SiteKeyCreateResult, 'account'> & {
+    account?: SiteChannelAccountServer | null;
+};
+
+export type SiteKeyCreateBatchFailure = {
+    group_key: string;
+    group_name: string;
+    message: string;
+};
+
+export type SiteKeyCreateBatchResult = {
+    attempted_count: number;
+    created_count: number;
+    already_exists_count: number;
+    failed_count: number;
+    sync_pending: boolean;
+    failures: SiteKeyCreateBatchFailure[];
+    account?: SiteChannelAccount;
+};
+
+type SiteKeyCreateBatchResultServer = Omit<SiteKeyCreateBatchResult, 'account' | 'failures'> & {
+    failures?: SiteKeyCreateBatchFailure[] | null;
+    account?: SiteChannelAccountServer | null;
 };
 
 export type SiteSourceKeyAddRequest = {
@@ -492,17 +571,51 @@ export function useCreateSiteChannelKey(siteId: number, accountId: number) {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: async (payload: SiteChannelKeyCreateRequest) =>
-            apiClient.post<SiteChannelAccountServer>(getAccountPath(siteId, accountId, '/keys'), payload),
-        onSuccess: (account) => {
-            const normalizedAccount = normalizeSiteChannelAccount(account);
-            queryClient.setQueryData<SiteChannelCard[]>(['site-channel', 'list'], (cards) =>
-                replaceSiteChannelAccount(cards, siteId, normalizedAccount),
-            );
+        mutationFn: async (payload: SiteChannelKeyCreateRequest): Promise<SiteKeyCreateResult> => {
+            const result = await apiClient.post<SiteKeyCreateResultServer>(getAccountPath(siteId, accountId, '/keys'), payload);
+            return {
+                ...result,
+                account: result.account ? normalizeSiteChannelAccount(result.account) : undefined,
+            };
+        },
+        onSuccess: (result) => {
+            const account = result.account;
+            if (account) {
+                queryClient.setQueryData<SiteChannelCard[]>(['site-channel', 'list'], (cards) =>
+                    replaceSiteChannelAccount(cards, siteId, account),
+                );
+            }
             invalidateSiteChannelQueries(queryClient);
         },
         onError: (error) => {
             logger.error('site channel key create failed:', error);
+        },
+    });
+}
+
+export function useCreateAllMissingSiteChannelKeys(siteId: number, accountId: number) {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (): Promise<SiteKeyCreateBatchResult> => {
+            const result = await apiClient.post<SiteKeyCreateBatchResultServer>(getAccountPath(siteId, accountId, '/keys/batch'), {});
+            return {
+                ...result,
+                failures: result.failures ?? [],
+                account: result.account ? normalizeSiteChannelAccount(result.account) : undefined,
+            };
+        },
+        onSuccess: (result) => {
+            const account = result.account;
+            if (account) {
+                queryClient.setQueryData<SiteChannelCard[]>(['site-channel', 'list'], (cards) =>
+                    replaceSiteChannelAccount(cards, siteId, account),
+                );
+            }
+            invalidateSiteChannelQueries(queryClient);
+        },
+        onError: (error) => {
+            logger.error('site channel batch key create failed:', error);
         },
     });
 }

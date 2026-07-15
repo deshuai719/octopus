@@ -162,8 +162,8 @@ func syncManagementPlatform(ctx context.Context, siteRecord *model.Site, account
 	if len(tokens) == 0 && strings.TrimSpace(account.APIKey) != "" {
 		tokens = append(tokens, model.SiteToken{Name: "default", Token: strings.TrimSpace(account.APIKey), GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, Enabled: true, Source: "fallback", IsDefault: true})
 	}
-	if len(tokens) == 0 {
-		return nil, newMissingGroupKeyError(model.SiteDefaultGroupKey)
+	if len(groups) == 0 {
+		groups = []model.SiteUserGroup{{GroupKey: model.SiteDefaultGroupKey, Name: model.SiteDefaultGroupName}}
 	}
 
 	groups = mergeSiteGroups(groups, tokens)
@@ -229,6 +229,9 @@ func syncManagementPlatform(ctx context.Context, siteRecord *model.Site, account
 	balance, balanceUsed, todayIncome := fetchSiteAccountBalance(ctx, siteRecord, account, accessToken, firstManagedPlatformUserID(account))
 	message := buildSyncSnapshotMessage(groupResults)
 	snapshot := &syncSnapshot{accessToken: accessToken, groups: groups, tokens: tokens, models: siteModels, groupResults: groupResults, status: status, balance: balance, balanceUsed: balanceUsed, todayIncome: todayIncome, message: message}
+	if len(tokens) == 0 {
+		return snapshot, newMissingGroupKeyError(model.SiteDefaultGroupKey)
+	}
 	if status == model.SiteExecutionStatusFailed {
 		return snapshot, buildSyncSnapshotFailure(groupResults)
 	}
@@ -267,16 +270,15 @@ func syncSub2APIWithAccessToken(ctx context.Context, siteRecord *model.Site, acc
 	if err != nil {
 		return nil, err
 	}
-	if len(tokens) == 0 && strings.TrimSpace(account.APIKey) != "" {
-		tokens = append(tokens, model.SiteToken{Name: "default", Token: strings.TrimSpace(account.APIKey), GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, Enabled: true, Source: "fallback", IsDefault: true})
-	}
-	if len(tokens) == 0 {
-		return nil, apperror.New(apperror.CodeSiteSub2APIAPIKeyRequired, "sub2api sync requires an API key; create a key on the site and sync again")
-	}
-
 	groups, err := fetchSub2APIGroups(ctx, siteRecord, account, accessToken, tokens)
 	if err != nil {
 		groups = nil
+	}
+	if len(tokens) == 0 && strings.TrimSpace(account.APIKey) != "" {
+		tokens = append(tokens, model.SiteToken{Name: "default", Token: strings.TrimSpace(account.APIKey), GroupKey: model.SiteDefaultGroupKey, GroupName: model.SiteDefaultGroupName, Enabled: true, Source: "fallback", IsDefault: true})
+	}
+	if len(groups) == 0 {
+		groups = []model.SiteUserGroup{{GroupKey: model.SiteDefaultGroupKey, Name: model.SiteDefaultGroupName}}
 	}
 	groups = mergeSiteGroups(groups, tokens)
 	siteModels, tokenGroupResults := syncSiteModelsByGroup(
@@ -301,6 +303,9 @@ func syncSub2APIWithAccessToken(ctx context.Context, siteRecord *model.Site, acc
 	status := buildSyncSnapshotStatus(groupResults)
 	balance, balanceUsed, todayIncome := fetchSiteAccountBalance(ctx, siteRecord, account, accessToken, 0)
 	snapshot := &syncSnapshot{accessToken: accessToken, groups: groups, tokens: tokens, models: siteModels, groupResults: groupResults, status: status, balance: balance, balanceUsed: balanceUsed, todayIncome: todayIncome, message: buildSyncSnapshotMessage(groupResults)}
+	if len(tokens) == 0 {
+		return snapshot, apperror.New(apperror.CodeSiteSub2APIAPIKeyRequired, "sub2api sync requires an API key; create a key on the site and sync again")
+	}
 	if status == model.SiteExecutionStatusFailed {
 		return snapshot, buildSyncSnapshotFailure(groupResults)
 	}

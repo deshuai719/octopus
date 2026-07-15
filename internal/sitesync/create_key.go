@@ -4,45 +4,255 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
 
+	"github.com/bestruirui/octopus/internal/apperror"
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/utils/log"
 )
 
-func CreateAccountToken(ctx context.Context, accountID int, req model.SiteChannelKeyCreateRequest) (*model.SiteSyncResult, error) {
+func CreateAccountToken(ctx context.Context, siteID int, accountID int, req model.SiteChannelKeyCreateRequest) (*model.SiteKeyCreateResult, error) {
+	siteRecord, account, err := loadWritableKeyCreateAccount(ctx, siteID, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	groupKey, err := normalizeRequestedGroupKey(req.GroupKey)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := SyncAccount(ctx, accountID); err != nil && !isMissingKeySyncError(err) {
+		return nil, fmt.Errorf("failed to refresh site account before key creation: %w", err)
+	}
+
+	siteRecord, account, err = loadWritableKeyCreateAccount(ctx, siteID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	accountView, err := op.SiteChannelAccountGet(siteID, accountID, ctx)
+	if err != nil {
+		return nil, err
+	}
+	group, ok := findSiteChannelGroup(accountView.Groups, groupKey)
+	if !ok {
+		return nil, fmt.Errorf("site group %s not found after refresh", groupKey)
+	}
+	if group.HasKeys {
+		return &model.SiteKeyCreateResult{
+			Status:        model.SiteKeyCreateStatusAlreadyExists,
+			RemoteApplied: false,
+			Message:       "该分组已存在 Key，未重复创建",
+			Account:       accountView,
+		}, nil
+	}
+
+	name := firstNonEmptyString(strings.TrimSpace(req.Name), strings.TrimSpace(group.GroupName), groupKey)
+	if err := createRemoteAccountToken(ctx, siteRecord, account, groupKey, name); err != nil {
+		recordKeyCreateAuthFailure(ctx, account, err)
+		return nil, sanitizeSiteError(err)
+	}
+
+	if _, err := SyncAccount(ctx, accountID); err != nil && !isMissingKeySyncError(err) {
+		staleView, _ := op.SiteChannelAccountGet(siteID, accountID, ctx)
+		return &model.SiteKeyCreateResult{
+			Status:        model.SiteKeyCreateStatusRemoteCreatedSyncFailed,
+			RemoteApplied: true,
+			SyncPending:   true,
+			Message:       "上游已创建 Key，但本地同步失败；请先重新同步，不要重复创建",
+			Account:       staleView,
+		}, nil
+	}
+
+	accountView, err = op.SiteChannelAccountGet(siteID, accountID, ctx)
+	if err != nil {
+		return &model.SiteKeyCreateResult{
+			Status:        model.SiteKeyCreateStatusRemoteCreatedSyncFailed,
+			RemoteApplied: true,
+			SyncPending:   true,
+			Message:       "上游已创建 Key，但本地账号视图刷新失败；请先重新同步，不要重复创建",
+		}, nil
+	}
+	refreshedGroup, ok := findSiteChannelGroup(accountView.Groups, groupKey)
+	if !ok || !refreshedGroup.HasKeys {
+		return &model.SiteKeyCreateResult{
+			Status:        model.SiteKeyCreateStatusRemoteCreatedSyncFailed,
+			RemoteApplied: true,
+			SyncPending:   true,
+			Message:       "上游已接受创建请求，但同步后仍未读取到目标 Key；请先重新同步，不要重复创建",
+			Account:       accountView,
+		}, nil
+	}
+	return &model.SiteKeyCreateResult{
+		Status:        model.SiteKeyCreateStatusCreated,
+		RemoteApplied: true,
+		Message:       "Key 已创建并完成同步",
+		Account:       accountView,
+	}, nil
+}
+
+func CreateAllMissingAccountTokens(ctx context.Context, siteID int, accountID int) (*model.SiteKeyCreateBatchResult, error) {
+	if _, _, err := loadWritableKeyCreateAccount(ctx, siteID, accountID); err != nil {
+		return nil, err
+	}
+	if _, err := SyncAccount(ctx, accountID); err != nil && !isMissingKeySyncError(err) {
+		return nil, fmt.Errorf("failed to refresh site account before batch key creation: %w", err)
+	}
+
 	siteRecord, account, err := loadSiteAccount(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
-	if siteRecord == nil || account == nil {
+	if siteRecord.ID != siteID {
 		return nil, fmt.Errorf("site account not found")
 	}
+	if err := requireWritableKeyCreateCapability(siteRecord, account); err != nil {
+		return nil, err
+	}
 
-	groupKey := model.NormalizeSiteGroupKey(req.GroupKey)
-	name := strings.TrimSpace(req.Name)
+	accountView, err := op.SiteChannelAccountGet(siteID, accountID, ctx)
+	if err != nil {
+		return nil, err
+	}
+	pendingGroups := make([]model.SiteChannelGroup, 0)
+	alreadyExistsCount := 0
+	for _, group := range accountView.Groups {
+		if group.HasKeys {
+			alreadyExistsCount++
+			continue
+		}
+		pendingGroups = append(pendingGroups, group)
+	}
+	sort.SliceStable(pendingGroups, func(i, j int) bool {
+		return pendingGroups[i].GroupKey < pendingGroups[j].GroupKey
+	})
 
-	var createErr error
+	result := &model.SiteKeyCreateBatchResult{
+		AttemptedCount:     len(pendingGroups),
+		AlreadyExistsCount: alreadyExistsCount,
+		Failures:           make([]model.SiteKeyCreateBatchFailure, 0),
+		Account:            accountView,
+	}
+	if len(pendingGroups) == 0 {
+		return result, nil
+	}
+	for _, group := range pendingGroups {
+		groupKey := model.NormalizeSiteGroupKey(group.GroupKey)
+		name := firstNonEmptyString(strings.TrimSpace(group.GroupName), groupKey)
+		if createErr := createRemoteAccountToken(ctx, siteRecord, account, groupKey, name); createErr != nil {
+			recordKeyCreateAuthFailure(ctx, account, createErr)
+			result.Failures = append(result.Failures, model.SiteKeyCreateBatchFailure{
+				GroupKey:  groupKey,
+				GroupName: name,
+				Message:   sanitizeSiteStatusMessage(createErr),
+			})
+			continue
+		}
+		result.CreatedCount++
+	}
+	result.FailedCount = len(result.Failures)
+
+	if _, err := SyncAccount(ctx, accountID); err != nil && !isMissingKeySyncError(err) {
+		result.SyncPending = result.CreatedCount > 0
+		return result, nil
+	}
+	if refreshed, err := op.SiteChannelAccountGet(siteID, accountID, ctx); err == nil {
+		result.Account = refreshed
+		createdGroups := make(map[string]struct{}, result.CreatedCount)
+		failedGroups := make(map[string]struct{}, len(result.Failures))
+		for _, failure := range result.Failures {
+			failedGroups[failure.GroupKey] = struct{}{}
+		}
+		for _, group := range pendingGroups {
+			groupKey := model.NormalizeSiteGroupKey(group.GroupKey)
+			if _, failed := failedGroups[groupKey]; !failed {
+				createdGroups[groupKey] = struct{}{}
+			}
+		}
+		for _, group := range refreshed.Groups {
+			key := model.NormalizeSiteGroupKey(group.GroupKey)
+			if _, expected := createdGroups[key]; expected && group.HasKeys {
+				delete(createdGroups, key)
+			}
+		}
+		if len(createdGroups) > 0 {
+			result.SyncPending = true
+		}
+	} else if result.CreatedCount > 0 {
+		result.SyncPending = true
+	}
+	return result, nil
+}
+
+func loadWritableKeyCreateAccount(ctx context.Context, siteID int, accountID int) (*model.Site, *model.SiteAccount, error) {
+	siteRecord, account, err := loadSiteAccount(ctx, accountID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if siteRecord == nil || account == nil || siteRecord.ID != siteID || account.SiteID != siteID {
+		return nil, nil, fmt.Errorf("site account not found")
+	}
+	if err := requireWritableKeyCreateCapability(siteRecord, account); err != nil {
+		return nil, nil, err
+	}
+	return siteRecord, account, nil
+}
+
+func requireWritableKeyCreateCapability(siteRecord *model.Site, account *model.SiteAccount) error {
+	capability := model.SiteKeyCreateCapabilityFor(siteRecord, account)
+	if capability.CanCreateSingle && capability.CanCreateAll {
+		return nil
+	}
+	return fmt.Errorf("%s: %s", capability.ReasonCode, capability.Reason)
+}
+
+func normalizeRequestedGroupKey(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("group key is required")
+	}
+	return model.NormalizeSiteGroupKey(value), nil
+}
+
+func isMissingKeySyncError(err error) bool {
+	if err == nil {
+		return false
+	}
+	code := apperror.Code(err)
+	return code == CodeSiteSyncMissingGroupKey || code == apperror.CodeSiteSub2APIAPIKeyRequired
+}
+
+func findSiteChannelGroup(groups []model.SiteChannelGroup, groupKey string) (model.SiteChannelGroup, bool) {
+	for _, group := range groups {
+		if model.NormalizeSiteGroupKey(group.GroupKey) == groupKey {
+			return group, true
+		}
+	}
+	return model.SiteChannelGroup{}, false
+}
+
+func recordKeyCreateAuthFailure(ctx context.Context, account *model.SiteAccount, err error) {
+	if authErr := recordAccountAuthFailure(ctx, account, "create_key", err); authErr != nil {
+		log.Warnf("failed to update site account auth state after key creation failure (account=%d): %v", account.ID, authErr)
+	}
+}
+
+func createRemoteAccountToken(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, groupKey string, name string) error {
+	if err := requireWritableKeyCreateCapability(siteRecord, account); err != nil {
+		return err
+	}
 	switch siteRecord.Platform {
 	case model.SitePlatformAnyRouter:
-		createErr = createAnyRouterToken(ctx, siteRecord, account, groupKey, name)
-	case model.SitePlatformNewAPI, model.SitePlatformOneAPI, model.SitePlatformOneHub, model.SitePlatformDoneHub:
-		createErr = createManagementPlatformToken(ctx, siteRecord, account, groupKey, name)
+		return createAnyRouterToken(ctx, siteRecord, account, groupKey, name)
+	case model.SitePlatformNewAPI, model.SitePlatformOneHub, model.SitePlatformDoneHub:
+		return createManagementPlatformToken(ctx, siteRecord, account, groupKey, name)
 	case model.SitePlatformSub2API:
-		createErr = createSub2APIToken(ctx, siteRecord, account, groupKey, name)
+		return createSub2APIToken(ctx, siteRecord, account, groupKey, name)
 	default:
-		return nil, fmt.Errorf("site platform %s does not support quick key creation", siteRecord.Platform)
+		return fmt.Errorf("site platform %s does not support group key creation", siteRecord.Platform)
 	}
-	if createErr != nil {
-		if authErr := recordAccountAuthFailure(ctx, account, "create_key", createErr); authErr != nil {
-			log.Warnf("failed to update site account auth state after key creation failure (account=%d): %v", account.ID, authErr)
-		}
-		return nil, sanitizeSiteError(createErr)
-	}
-
-	return SyncAccount(ctx, accountID)
 }
 
 func createManagementPlatformToken(ctx context.Context, siteRecord *model.Site, account *model.SiteAccount, groupKey string, name string) error {
@@ -63,7 +273,7 @@ func createManagementPlatformToken(ctx context.Context, siteRecord *model.Site, 
 		siteRecord,
 		http.MethodPost,
 		buildSiteURL(siteRecord.BaseURL, "/api/token/"),
-		buildManagedTokenCreatePayload(account, groupKey, name),
+		buildManagedTokenCreatePayload(siteRecord.Platform, groupKey, name),
 		accessToken,
 		account,
 	)
@@ -89,7 +299,7 @@ func createAnyRouterToken(ctx context.Context, siteRecord *model.Site, account *
 		return err
 	}
 
-	payloadBody := buildManagedTokenCreatePayload(account, groupKey, name)
+	payloadBody := buildManagedTokenCreatePayload(siteRecord.Platform, groupKey, name)
 	requestURL := buildSiteURL(siteRecord.BaseURL, "/api/token/")
 
 	userID, _ := anyRouterDiscoverUserID(ctx, siteRecord, account, accessToken)
@@ -104,6 +314,9 @@ func createAnyRouterToken(ctx context.Context, siteRecord *model.Site, account *
 	)
 	if err == nil && siteTokenCreateSucceeded(payload) {
 		return nil
+	}
+	if err != nil && !shouldTryAlternativeManagedAuth(err) {
+		return err
 	}
 
 	tryUserIDs := []int{userID}
@@ -131,6 +344,9 @@ func createAnyRouterToken(ctx context.Context, siteRecord *model.Site, account *
 				account,
 			)
 			if requestErr != nil {
+				if !shouldTryAlternativeManagedAuth(requestErr) {
+					return requestErr
+				}
 				if err == nil {
 					err = requestErr
 				}
@@ -159,18 +375,21 @@ func createSub2APIToken(ctx context.Context, siteRecord *model.Site, account *mo
 		return fmt.Errorf("API key credential account does not support quick site key creation")
 	}
 
-	accessToken := strings.TrimSpace(account.AccessToken)
+	groupID, err := strconv.Atoi(model.NormalizeSiteGroupKey(groupKey))
+	if err != nil || groupID <= 0 {
+		return fmt.Errorf("sub2api group key %q is not a positive group id", groupKey)
+	}
+
 	accessToken, err := ensureFreshSub2APIAccessToken(ctx, siteRecord, account, false)
 	if err != nil {
 		return err
 	}
 
-	requestBody := buildSub2APITokenCreatePayload(account, groupKey, name)
+	requestBody := buildSub2APITokenCreatePayload(groupID, name)
 	headers := map[string]string{"Authorization": ensureBearer(accessToken)}
 	endpoints := []string{"/api/v1/keys", "/api/v1/api-keys"}
-	var firstErr error
 
-	for _, endpoint := range endpoints {
+	for index, endpoint := range endpoints {
 		payload, err := requestJSON(
 			ctx,
 			siteRecord,
@@ -180,58 +399,52 @@ func createSub2APIToken(ctx context.Context, siteRecord *model.Site, account *mo
 			headers,
 			account,
 		)
+		if err != nil && shouldRetrySub2APIAfterRefresh(err, account) {
+			refreshedToken, refreshErr := ensureFreshSub2APIAccessToken(ctx, siteRecord, account, true)
+			if refreshErr == nil && stripBearerPrefix(refreshedToken) != stripBearerPrefix(accessToken) {
+				accessToken = refreshedToken
+				headers = map[string]string{"Authorization": ensureBearer(refreshedToken)}
+				payload, err = requestJSON(ctx, siteRecord, http.MethodPost, buildSiteURL(siteRecord.BaseURL, endpoint), requestBody, headers, account)
+			}
+		}
 		if err != nil {
-			if shouldRetrySub2APIAfterRefresh(err, account) {
-				refreshedToken, refreshErr := ensureFreshSub2APIAccessToken(ctx, siteRecord, account, true)
-				if refreshErr == nil && stripBearerPrefix(refreshedToken) != stripBearerPrefix(accessToken) {
-					headers = map[string]string{"Authorization": ensureBearer(refreshedToken)}
-					payload, err = requestJSON(
-						ctx,
-						siteRecord,
-						http.MethodPost,
-						buildSiteURL(siteRecord.BaseURL, endpoint),
-						requestBody,
-						headers,
-						account,
-					)
-					if err == nil {
-						data, envelopeErr := unwrapSub2APIData(payload, endpoint)
-						if envelopeErr == nil && siteTokenCreateSucceededFromAny(data) {
-							return nil
-						}
-						if envelopeErr != nil && firstErr == nil {
-							firstErr = envelopeErr
-						}
-					}
-				}
+			if index == 0 && isSub2APIEndpointNotFound(err) {
+				continue
 			}
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
+			return err
 		}
-		if data, envelopeErr := unwrapSub2APIData(payload, endpoint); envelopeErr == nil {
-			if siteTokenCreateSucceededFromAny(data) {
-				return nil
-			}
-		} else {
-			return envelopeErr
+		if err := validateSub2APITokenCreateResponse(payload, endpoint); err != nil {
+			return err
 		}
-		if siteTokenCreateSucceeded(payload) {
-			return nil
-		}
-		return fmt.Errorf("%s", firstNonEmptyString(extractSiteResponseMessage(payload), "site token creation failed"))
+		return nil
 	}
-
-	if firstErr != nil {
-		return firstErr
-	}
-	return fmt.Errorf("site token creation failed")
+	return fmt.Errorf("sub2api key creation endpoint not found")
 }
 
-func buildManagedTokenCreatePayload(account *model.SiteAccount, groupKey string, name string) map[string]any {
+func isSub2APIEndpointNotFound(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "http 404")
+}
+
+func validateSub2APITokenCreateResponse(payload map[string]any, endpoint string) error {
+	if _, hasCode := payload["code"]; hasCode {
+		data, err := unwrapSub2APIData(payload, endpoint)
+		if err != nil {
+			return err
+		}
+		if data == nil {
+			return fmt.Errorf("sub2api %s response missing created key data", endpoint)
+		}
+		return nil
+	}
+	if siteTokenCreateSucceeded(payload) {
+		return nil
+	}
+	return fmt.Errorf("%s", firstNonEmptyString(extractSiteResponseMessage(payload), "site token creation failed"))
+}
+
+func buildManagedTokenCreatePayload(platform model.SitePlatform, groupKey string, name string) map[string]any {
 	return map[string]any{
-		"name":                 defaultSiteTokenCreateName(account, groupKey, name),
+		"name":                 defaultSiteTokenCreateName(platform, groupKey, name),
 		"unlimited_quota":      true,
 		"expired_time":         -1,
 		"remain_quota":         0,
@@ -242,23 +455,32 @@ func buildManagedTokenCreatePayload(account *model.SiteAccount, groupKey string,
 	}
 }
 
-func buildSub2APITokenCreatePayload(account *model.SiteAccount, groupKey string, name string) map[string]any {
-	payload := map[string]any{
-		"name": defaultSiteTokenCreateName(account, groupKey, name),
+func buildSub2APITokenCreatePayload(groupID int, name string) map[string]any {
+	return map[string]any{
+		"name":     defaultSiteTokenCreateName(model.SitePlatformSub2API, strconv.Itoa(groupID), name),
+		"group_id": groupID,
 	}
-	groupKey = model.NormalizeSiteGroupKey(groupKey)
-	if groupID, err := strconv.Atoi(groupKey); err == nil && groupID > 0 {
-		payload["group_id"] = groupID
-	}
-	return payload
 }
 
-func defaultSiteTokenCreateName(account *model.SiteAccount, groupKey string, name string) string {
+func defaultSiteTokenCreateName(platform model.SitePlatform, groupKey string, name string) string {
 	if trimmed := strings.TrimSpace(name); trimmed != "" {
-		return normalizeSiteTokenCreateName(trimmed)
+		return normalizeSiteTokenCreateNameForPlatform(trimmed, platform)
 	}
 
-	return normalizeSiteTokenCreateName(firstNonEmptyString(strings.TrimSpace(groupKey), model.SiteDefaultGroupKey))
+	return normalizeSiteTokenCreateNameForPlatform(firstNonEmptyString(strings.TrimSpace(groupKey), model.SiteDefaultGroupKey), platform)
+}
+
+func normalizeSiteTokenCreateNameForPlatform(value string, platform model.SitePlatform) string {
+	value = normalizeSiteTokenCreateName(value)
+	maxRunes := 50
+	if platform == model.SitePlatformOneHub || platform == model.SitePlatformDoneHub {
+		maxRunes = 30
+	}
+	runes := []rune(value)
+	if len(runes) > maxRunes {
+		return strings.TrimSpace(string(runes[:maxRunes]))
+	}
+	return value
 }
 
 func normalizeSiteTokenCreateName(value string) string {
@@ -316,7 +538,7 @@ func siteTokenCreateSucceededFromAny(value any) bool {
 		}
 		return false
 	}
-	return true
+	return false
 }
 
 func slicesCompactInts(values []int) []int {

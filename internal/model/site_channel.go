@@ -11,15 +11,16 @@ type SiteChannelCard struct {
 }
 
 type SiteChannelAccount struct {
-	SiteID         int                `json:"site_id"`
-	AccountID      int                `json:"account_id"`
-	AccountName    string             `json:"account_name"`
-	Enabled        bool               `json:"enabled"`
-	AutoSync       bool               `json:"auto_sync"`
-	GroupCount     int                `json:"group_count"`
-	ModelCount     int                `json:"model_count"`
-	Groups         []SiteChannelGroup `json:"groups"`
-	RouteSummaries []SiteRouteSummary `json:"route_summaries"`
+	SiteID         int                     `json:"site_id"`
+	AccountID      int                     `json:"account_id"`
+	AccountName    string                  `json:"account_name"`
+	Enabled        bool                    `json:"enabled"`
+	AutoSync       bool                    `json:"auto_sync"`
+	GroupCount     int                     `json:"group_count"`
+	ModelCount     int                     `json:"model_count"`
+	Groups         []SiteChannelGroup      `json:"groups"`
+	RouteSummaries []SiteRouteSummary      `json:"route_summaries"`
+	KeyCreation    SiteKeyCreateCapability `json:"key_creation"`
 }
 
 type SiteRouteSummary struct {
@@ -155,6 +156,38 @@ type SiteManualModelDeleteRequest struct {
 type SiteChannelKeyCreateRequest struct {
 	GroupKey string `json:"group_key" binding:"required"`
 	Name     string `json:"name,omitempty"`
+}
+
+type SiteKeyCreateStatus string
+
+const (
+	SiteKeyCreateStatusCreated                 SiteKeyCreateStatus = "created"
+	SiteKeyCreateStatusAlreadyExists           SiteKeyCreateStatus = "already_exists"
+	SiteKeyCreateStatusRemoteCreatedSyncFailed SiteKeyCreateStatus = "remote_created_sync_failed"
+)
+
+type SiteKeyCreateResult struct {
+	Status        SiteKeyCreateStatus `json:"status"`
+	RemoteApplied bool                `json:"remote_applied"`
+	SyncPending   bool                `json:"sync_pending,omitempty"`
+	Message       string              `json:"message"`
+	Account       *SiteChannelAccount `json:"account,omitempty"`
+}
+
+type SiteKeyCreateBatchFailure struct {
+	GroupKey  string `json:"group_key"`
+	GroupName string `json:"group_name"`
+	Message   string `json:"message"`
+}
+
+type SiteKeyCreateBatchResult struct {
+	AttemptedCount     int                         `json:"attempted_count"`
+	CreatedCount       int                         `json:"created_count"`
+	AlreadyExistsCount int                         `json:"already_exists_count"`
+	FailedCount        int                         `json:"failed_count"`
+	SyncPending        bool                        `json:"sync_pending"`
+	Failures           []SiteKeyCreateBatchFailure `json:"failures"`
+	Account            *SiteChannelAccount         `json:"account,omitempty"`
 }
 
 type SiteRemoteKeyUpdateRequest struct {

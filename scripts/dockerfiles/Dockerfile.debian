@@ -12,6 +12,6 @@ RUN apt-get update && apt-get install -y ca-certificates tzdata gosu && \
 COPY build/docker/${TARGETPLATFORM}/octopus /app/octopus
 COPY scripts/dockerfiles/entrypoint.sh /entrypoint.sh
 
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /app/octopus /entrypoint.sh
 
 CMD ["/entrypoint.sh"]

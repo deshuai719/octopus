@@ -215,6 +215,58 @@ func TestMergePersistedSiteTokensPreservesLocalEnabledStateWhenIncomingDisabled(
 	}
 }
 
+func TestMergePersistedSiteTokensPreservesUnmanagedReadyTokensWhenIncomingIsEmpty(t *testing.T) {
+	now := time.Unix(1711929600, 0)
+	existing := []model.SiteToken{
+		{
+			ID:            10,
+			SiteAccountID: 9,
+			ExternalID:    0,
+			Name:          "opaque",
+			Token:         "sk-opaque-ready",
+			GroupKey:      model.SiteDefaultGroupKey,
+			GroupName:     model.SiteDefaultGroupName,
+			Enabled:       true,
+			ValueStatus:   model.SiteTokenValueStatusReady,
+			Source:        "sync",
+		},
+		{
+			ID:            11,
+			SiteAccountID: 9,
+			ExternalID:    123,
+			Name:          "deleted-upstream",
+			Token:         "sk-remote-deleted",
+			GroupKey:      model.SiteDefaultGroupKey,
+			GroupName:     model.SiteDefaultGroupName,
+			Enabled:       true,
+			ValueStatus:   model.SiteTokenValueStatusReady,
+			Source:        "sync",
+		},
+		{
+			ID:            12,
+			SiteAccountID: 9,
+			ExternalID:    0,
+			Name:          "masked",
+			Token:         "abcd********wxyz",
+			GroupKey:      model.SiteDefaultGroupKey,
+			GroupName:     model.SiteDefaultGroupName,
+			ValueStatus:   model.SiteTokenValueStatusMaskedPending,
+			Source:        "sync",
+		},
+	}
+
+	merged := mergePersistedSiteTokens(9, existing, nil, now)
+	if len(merged) != 1 {
+		t.Fatalf("expected only the unmanaged ready token to survive an empty management snapshot, got %+v", merged)
+	}
+	if merged[0].Name != "opaque" || merged[0].Token != "sk-opaque-ready" {
+		t.Fatalf("expected the opaque ready token to be preserved, got %+v", merged[0])
+	}
+	if merged[0].ExternalID != 0 || merged[0].ValueStatus != model.SiteTokenValueStatusReady {
+		t.Fatalf("expected a ready token without a remote id, got %+v", merged[0])
+	}
+}
+
 func TestMergePersistedSiteTokensKeepsMaskedPendingWhenMatchIsAmbiguous(t *testing.T) {
 	now := time.Unix(1711929600, 0)
 	existing := []model.SiteToken{

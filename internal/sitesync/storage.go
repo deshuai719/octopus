@@ -364,7 +364,7 @@ func mergePersistedSiteTokens(accountID int, existingTokens []model.SiteToken, i
 				continue
 			}
 		}
-		if strings.TrimSpace(existing.Source) != "manual" {
+		if !shouldPreserveUnmatchedSiteToken(existing) {
 			continue
 		}
 		existing.LastSyncAt = &now
@@ -386,6 +386,15 @@ func mergePersistedSiteTokens(accountID int, existingTokens []model.SiteToken, i
 	}
 
 	return result
+}
+
+func shouldPreserveUnmatchedSiteToken(token model.SiteToken) bool {
+	if strings.TrimSpace(token.Source) == "manual" {
+		return true
+	}
+	return token.ExternalID <= 0 &&
+		model.IsReadySiteToken(token) &&
+		!model.IsMaskedSiteTokenValue(token.Token)
 }
 
 func mergeReadyIncomingSiteToken(incoming model.SiteToken, existingTokens []model.SiteToken, usedExistingIDs map[int]struct{}) model.SiteToken {

@@ -85,6 +85,7 @@ func SiteChannelAccountGet(siteID int, accountID int, ctx context.Context) (*mod
 		AccountName: target.Name,
 		Enabled:     target.Enabled,
 		AutoSync:    target.AutoSync,
+		KeyCreation: model.SiteKeyCreateCapabilityFor(site, target),
 		Groups:      buildSiteChannelGroups(ctx, *site, *target, historyMap),
 	}
 	view.GroupCount = len(view.Groups)
@@ -168,6 +169,7 @@ func buildSiteChannelCardWithHistories(ctx context.Context, site model.Site, his
 			AccountName: account.Name,
 			Enabled:     account.Enabled,
 			AutoSync:    account.AutoSync,
+			KeyCreation: model.SiteKeyCreateCapabilityFor(&site, &account),
 			Groups:      buildSiteChannelGroups(ctx, site, account, history),
 		}
 		view.GroupCount = len(view.Groups)

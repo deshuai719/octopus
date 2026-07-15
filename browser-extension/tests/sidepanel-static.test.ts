@@ -18,6 +18,12 @@ describe("side panel visibility contract", () => {
     expect(sidepanelScript).toContain('matchedAccount.textContent = capture.account_name || capture.candidate?.identity_label || "—"');
   });
 
+  it("edits an existing account using the Octopus-saved name as the default", () => {
+    expect(sidepanelScript).toContain('accountNameInput.value = capture.account_name || capture.candidate?.identity_label || "默认账号"');
+    expect(sidepanelScript).toContain('["create_site_account", "create_account", "update_account"].includes(capture.action ?? "")');
+    expect(sidepanelHTML).toContain('id="account-name" maxlength="128"');
+  });
+
   it("clears previous matched values before switching capture context", () => {
     expect(sidepanelScript).toContain('matchedSite.textContent = "—"');
     expect(sidepanelScript).toContain('matchedAccount.textContent = "—"');

@@ -31,6 +31,7 @@ func init() {
 		Use(middleware.Auth()).
 		Use(middleware.RequireJSON()).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/keys", http.MethodPost).Handle(createSiteChannelKey)).
+		AddRoute(router.NewRoute("/:siteId/account/:accountId/keys/batch", http.MethodPost).Handle(createAllMissingSiteChannelKeys)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/remote-keys/:tokenId", http.MethodPut).Handle(updateSiteRemoteKey)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/source-keys", http.MethodPut).Handle(updateSiteSourceKeys)).
 		AddRoute(router.NewRoute("/:siteId/account/:accountId/group-projection", http.MethodPut).Handle(updateSiteGroupProjection)).
@@ -155,16 +156,27 @@ func createSiteChannelKey(c *gin.Context) {
 		resp.InvalidJSON(c)
 		return
 	}
-	if _, err := sitesvc.CreateAccountToken(c.Request.Context(), accountID, req); err != nil {
-		resp.ErrorWithAppError(c, http.StatusInternalServerError, apperror.Wrap(op.CodeSiteChannelKeyCreateFailed, "site channel key create failed", err).WithStatus(http.StatusInternalServerError))
-		return
-	}
-	data, err := op.SiteChannelAccountGet(siteID, accountID, c.Request.Context())
+	result, err := sitesvc.CreateAccountToken(c.Request.Context(), siteID, accountID, req)
 	if err != nil {
-		resp.Error(c, http.StatusInternalServerError, err.Error())
+		status := siteChannelMutationErrorStatus(err)
+		resp.ErrorWithAppError(c, status, apperror.Wrap(op.CodeSiteChannelKeyCreateFailed, "site channel key create failed", err).WithStatus(status))
 		return
 	}
-	resp.Success(c, data)
+	resp.Success(c, result)
+}
+
+func createAllMissingSiteChannelKeys(c *gin.Context) {
+	siteID, accountID, ok := parseSiteChannelIDs(c)
+	if !ok {
+		return
+	}
+	result, err := sitesvc.CreateAllMissingAccountTokens(c.Request.Context(), siteID, accountID)
+	if err != nil {
+		status := siteChannelMutationErrorStatus(err)
+		resp.ErrorWithAppError(c, status, apperror.Wrap(op.CodeSiteChannelKeyCreateFailed, "site channel batch key create failed", err).WithStatus(status))
+		return
+	}
+	resp.Success(c, result)
 }
 
 func updateSiteSourceKeys(c *gin.Context) {
@@ -388,7 +400,9 @@ func siteChannelMutationErrorStatus(err error) int {
 		strings.Contains(message, "duplicate"),
 		strings.Contains(message, "already exists"),
 		strings.Contains(message, "json object"),
-		strings.Contains(message, "unsupported"):
+		strings.Contains(message, "unsupported"),
+		strings.Contains(message, "not_supported"),
+		strings.Contains(message, "read_only"):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError

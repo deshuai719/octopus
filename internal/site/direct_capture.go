@@ -237,6 +237,11 @@ func ConfirmDirectCapture(ctx context.Context, captureID string, request DirectC
 		directCaptures.mu.Unlock()
 		return DirectCaptureView{}, directCaptureError("direct_capture.conflict", "preview changed or is no longer confirmable", http.StatusConflict, "confirmation", false, "restart_capture")
 	}
+	accountName, err := directCaptureConfirmAccountName(request.AccountName, session.Validated, session.Match)
+	if err != nil {
+		directCaptures.mu.Unlock()
+		return DirectCaptureView{}, err
+	}
 	session.Phase = DirectCapturePhaseConfirming
 	validated := *session.Validated
 	match := *session.Match
@@ -244,7 +249,7 @@ func ConfirmDirectCapture(ctx context.Context, captureID string, request DirectC
 
 	persisted, err := op.ConfirmDirectCapture(ctx, op.DirectCapturePersistInput{
 		Match: match, CanonicalOrigin: validated.Origin, Platform: validated.Platform,
-		SiteName: firstDirectCaptureName(request.SiteName, match.SiteName), AccountName: firstDirectCaptureName(request.AccountName, firstDirectCaptureName(validated.IdentityLabel, match.AccountName)),
+		SiteName: firstDirectCaptureName(request.SiteName, match.SiteName), AccountName: accountName,
 		AccessToken: validated.AccessToken, RefreshToken: validated.RefreshToken, TokenExpiresAt: validated.TokenExpiresAt, PlatformUserID: validated.PlatformUserID,
 	})
 	if err != nil {
@@ -273,6 +278,29 @@ func ConfirmDirectCapture(ctx context.Context, captureID string, request DirectC
 	directCaptures.mu.Unlock()
 	startDirectCaptureSync(captureID, persisted.AccountID, session.OperationID)
 	return view, nil
+}
+
+func directCaptureConfirmAccountName(raw string, candidate *sitesync.ValidatedDirectCaptureCandidate, match *op.DirectCaptureMatch) (string, error) {
+	if strings.TrimSpace(raw) == "" && raw != "" {
+		return "", directCaptureError("direct_capture.account_name.invalid", "account name must not be blank", http.StatusBadRequest, "confirmation", false, "edit_account_name")
+	}
+	name := strings.TrimSpace(raw)
+	if name == "" && match != nil && match.Action == op.DirectCaptureActionUpdateAccount {
+		name = strings.TrimSpace(match.AccountName)
+	}
+	if name == "" && candidate != nil {
+		name = strings.TrimSpace(candidate.IdentityLabel)
+	}
+	if name == "" && match != nil {
+		name = strings.TrimSpace(match.AccountName)
+	}
+	if name == "" {
+		name = "默认账号"
+	}
+	if len([]rune(name)) > 128 {
+		return "", directCaptureError("direct_capture.account_name.invalid", "account name must not exceed 128 characters", http.StatusBadRequest, "confirmation", false, "edit_account_name")
+	}
+	return name, nil
 }
 
 func GetDirectCapture(_ context.Context, captureID string) (DirectCaptureView, error) {

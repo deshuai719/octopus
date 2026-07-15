@@ -121,6 +121,31 @@ func TestConfirmDirectCaptureRejectsWrongPreviewVersionWithoutConsumingCandidate
 	}
 }
 
+func TestDirectCaptureConfirmAccountNameDefaultsAndValidation(t *testing.T) {
+	candidate := &sitesync.ValidatedDirectCaptureCandidate{IdentityLabel: "candidate-name"}
+	updateMatch := &op.DirectCaptureMatch{Action: op.DirectCaptureActionUpdateAccount, AccountName: "Octopus 保存名"}
+	createMatch := &op.DirectCaptureMatch{Action: op.DirectCaptureActionCreateAccount, AccountName: "默认账号"}
+
+	name, err := directCaptureConfirmAccountName("", candidate, updateMatch)
+	if err != nil || name != "Octopus 保存名" {
+		t.Fatalf("update default = %q, err=%v", name, err)
+	}
+	name, err = directCaptureConfirmAccountName("", candidate, createMatch)
+	if err != nil || name != "candidate-name" {
+		t.Fatalf("create default = %q, err=%v", name, err)
+	}
+	if _, err := directCaptureConfirmAccountName("   ", candidate, updateMatch); !apperror.IsCode(err, "direct_capture.account_name.invalid") {
+		t.Fatalf("blank name error = %v", err)
+	}
+	name, err = directCaptureConfirmAccountName(strings.Repeat("界", 128), candidate, updateMatch)
+	if err != nil || len([]rune(name)) != 128 {
+		t.Fatalf("128-character name = %q, err=%v", name, err)
+	}
+	if _, err := directCaptureConfirmAccountName(strings.Repeat("界", 129), candidate, updateMatch); !apperror.IsCode(err, "direct_capture.account_name.invalid") {
+		t.Fatalf("129-character name error = %v", err)
+	}
+}
+
 func TestSafeDirectCaptureMessageHidesUnknownErrors(t *testing.T) {
 	if got := safeDirectCaptureMessage(errors.New("driver error contains a database DSN")); got != "direct capture failed" {
 		t.Fatalf("unknown error message = %q", got)

@@ -113,13 +113,13 @@ function renderCapture(capture: DirectCaptureView): void {
   credentialMask.textContent = capture.candidate?.access_token_mask ?? "已在确认后清除";
   platformUserID.textContent = capture.candidate?.platform_user_id?.toString() ?? "未提供";
   siteNameInput.value = capture.site_name ?? "";
-  accountNameInput.value = capture.candidate?.identity_label || capture.account_name || "默认账号";
+  accountNameInput.value = capture.account_name || capture.candidate?.identity_label || "默认账号";
   matchedSite.textContent = capture.site_name || "—";
   matchedSiteRow.hidden = !capture.site_name;
   matchedAccount.textContent = capture.account_name || capture.candidate?.identity_label || "—";
   matchedAccountRow.hidden = !(capture.account_name || capture.candidate?.identity_label);
   siteNameField.hidden = capture.action !== "create_site_account";
-  accountNameField.hidden = !["create_site_account", "create_account"].includes(capture.action ?? "");
+  accountNameField.hidden = !["create_site_account", "create_account", "update_account"].includes(capture.action ?? "");
   accountResolutionField.hidden = capture.phase !== "resolution_required";
   accountResolution.replaceChildren(...(capture.account_options ?? []).map((account) => {
     const option = document.createElement("option");

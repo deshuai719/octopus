@@ -83,6 +83,7 @@ import {
     type SiteModelDisableUpdateRequest,
     type SiteModelRouteType,
     type SiteModelRouteUpdateRequest,
+    useCreateAllMissingSiteChannelKeys,
     useCreateSiteChannelKey,
     useDeleteSiteRemoteKey,
     useAddSiteManualModels,
@@ -129,6 +130,11 @@ import {
     routeTypeLabel,
     summarizeHistory,
 } from './utils';
+import {
+    buildKeyCreationView,
+    summarizeSiteKeyCreateBatchResult,
+    summarizeSiteKeyCreateResult,
+} from './key-creation-view';
 import { useJumpStore, type JumpTarget, type PendingJump, type SiteChannelJumpTarget, isSiteChannelJumpTarget } from '@/stores/jump';
 import { useEnableSiteAccount } from '@/api/endpoints/site';
 import {
@@ -1321,7 +1327,6 @@ function SiteAccountPanel({
     const [sourceKeyForm, setSourceKeyForm] = useState<SiteSourceKeyFormItem[]>([]);
     const [visibleSourceKeyRows, setVisibleSourceKeyRows] = useState<Record<string, boolean>>({});
     const [quickCreateName, setQuickCreateName] = useState('');
-    const [bulkCreatingKeys, setBulkCreatingKeys] = useState(false);
     const [savingSiteKeys, setSavingSiteKeys] = useState(false);
     const [deletingRemoteKeyId, setDeletingRemoteKeyId] = useState<number | null>(null);
     const [highlightedModelKey, setHighlightedModelKey] = useState<string | null>(null);
@@ -1339,6 +1344,7 @@ function SiteAccountPanel({
     const setTableSort = useSiteChannelPanelViewStore((state) => state.setTableSort);
 
     const createKeyMutation = useCreateSiteChannelKey(siteId, account.account_id);
+    const createAllKeysMutation = useCreateAllMissingSiteChannelKeys(siteId, account.account_id);
     const sourceKeyMutation = useUpdateSiteSourceKeys(siteId, account.account_id);
     const updateRemoteKeyMutation = useUpdateSiteRemoteKey(siteId, account.account_id);
     const deleteRemoteKeyMutation = useDeleteSiteRemoteKey(siteId, account.account_id);
@@ -1367,6 +1373,11 @@ function SiteAccountPanel({
         () => filterGroups(account.groups, activeFilter),
         [account.groups, activeFilter],
     );
+    const keyCreationView = useMemo(
+        () => buildKeyCreationView(visibleGroups, account.key_creation),
+        [visibleGroups, account.key_creation],
+    );
+    const pendingKeyGroups = keyCreationView.pendingGroups;
 
     const scopedModels = useMemo(() => {
         return flattenAccountModels(account, activeFilter).map((model) => {
@@ -1575,6 +1586,7 @@ function SiteAccountPanel({
     }, [pendingModelKeys, disabledMutation, siteId, account.account_id, translateSiteError]);
 
     const handleOpenCreateKey = (group: SiteChannelGroup) => {
+        if (!keyCreationView.canCreateSingle) return;
         setCreatingGroup(group);
         setQuickCreateName(group.group_name || group.group_key);
     };
@@ -1601,7 +1613,7 @@ function SiteAccountPanel({
     };
 
     const handleCreateKey = () => {
-        if (!creatingGroup) return;
+        if (!creatingGroup || !keyCreationView.canCreateSingle) return;
 
         createKeyMutation.mutate(
             {
@@ -1609,8 +1621,14 @@ function SiteAccountPanel({
                 name: quickCreateName.trim() || undefined,
             },
             {
-                onSuccess: () => {
-                    toast.success(`分组「${creatingGroup.group_name || creatingGroup.group_key}」已创建 Key 并完成同步`);
+                onSuccess: (result) => {
+                    const groupName = creatingGroup.group_name || creatingGroup.group_key;
+                    const message = summarizeSiteKeyCreateResult(result, groupName);
+                    if (result.status === 'remote_created_sync_failed') {
+                        toast.warning(message);
+                    } else {
+                        toast.success(message);
+                    }
                     setCreatingGroup(null);
                     setQuickCreateName('');
                 },
@@ -1621,31 +1639,24 @@ function SiteAccountPanel({
         );
     };
 
-    const handleCreateAllPendingKeys = async () => {
-        if (bulkCreatingKeys || pendingKeyGroups.length === 0) return;
+    const handleCreateAllPendingKeys = () => {
+        if (createAllKeysMutation.isPending || pendingKeyGroups.length === 0 || !keyCreationView.canCreateAll) return;
 
-        setBulkCreatingKeys(true);
-        const failed: string[] = [];
-        let succeeded = 0;
-        for (const group of pendingKeyGroups) {
-            const displayName = group.group_name || group.group_key;
-            try {
-                await createKeyMutation.mutateAsync({
-                    group_key: group.group_key,
-                    name: displayName,
-                });
-                succeeded += 1;
-            } catch {
-                failed.push(displayName);
-            }
-        }
-        setBulkCreatingKeys(false);
-
-        if (failed.length === 0) {
-            toast.success(`已按分组名创建并同步 ${succeeded} 个 Key`);
-            return;
-        }
-        toast.error(`批量创建完成：成功 ${succeeded} 个，失败 ${failed.length} 个（${failed.join('、')}）`);
+        createAllKeysMutation.mutate(undefined, {
+            onSuccess: (result) => {
+                const message = summarizeSiteKeyCreateBatchResult(result);
+                if (result.failed_count > 0) {
+                    toast.error(message);
+                } else if (result.sync_pending) {
+                    toast.warning(message);
+                } else {
+                    toast.success(message);
+                }
+            },
+            onError: (error) => {
+                toast.error(translateSiteError(error, '批量创建 Key 失败'));
+            },
+        });
     };
 
     const handleOpenProjectedKeys = (group: SiteChannelGroup) => {
@@ -1964,10 +1975,6 @@ function SiteAccountPanel({
     const activeGroupSuspensionReason = activeGroup?.projection_suspend_reason || activeGroup?.model_sync_message || '';
     const activeGroupStaleReason = activeGroup?.model_sync_message || '';
     const activeQuickFilterCount = panelPreferences.quickFilters.length;
-    const pendingKeyGroups = useMemo(
-        () => visibleGroups.filter((group) => !group.has_keys),
-        [visibleGroups],
-    );
     const projectedGroups = useMemo(
         () => visibleGroups.filter((group) => group.source_keys.length > 0),
         [visibleGroups],
@@ -2301,12 +2308,17 @@ function SiteAccountPanel({
                                                 size="sm"
                                                 className="h-7 rounded-full px-3 text-xs"
                                                 onClick={handleCreateAllPendingKeys}
-                                                disabled={bulkCreatingKeys || createKeyMutation.isPending}
+                                                disabled={createAllKeysMutation.isPending || createKeyMutation.isPending || !keyCreationView.canCreateAll}
                                             >
-                                                <RefreshCw className={cn('size-3.5', bulkCreatingKeys && 'animate-spin')} />
-                                                {bulkCreatingKeys ? '批量创建中' : '创建全部'}
+                                                <RefreshCw className={cn('size-3.5', createAllKeysMutation.isPending && 'animate-spin')} />
+                                                {createAllKeysMutation.isPending ? '批量创建中' : keyCreationView.canCreateAll ? '创建全部' : '不可创建'}
                                             </Button>
                                         </div>
+                                        {!keyCreationView.canCreateAll ? (
+                                            <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 text-[11px] leading-5 text-amber-900 dark:text-amber-100">
+                                                {keyCreationView.unavailableReason}
+                                            </div>
+                                        ) : null}
                                         <div className="flex flex-wrap gap-2">
                                             {pendingKeyGroups.map((group) => (
                                                 <Button
@@ -2316,11 +2328,11 @@ function SiteAccountPanel({
                                                     size="sm"
                                                     className="rounded-full border-amber-500/30 bg-white/60 text-amber-800 hover:bg-white dark:bg-background/40 dark:text-amber-200"
                                                     onClick={() => handleOpenCreateKey(group)}
-                                                    disabled={bulkCreatingKeys || createKeyMutation.isPending}
+                                                    disabled={createAllKeysMutation.isPending || createKeyMutation.isPending || !keyCreationView.canCreateSingle}
                                                 >
                                                     {group.group_name || group.group_key}
                                                     <span className="text-[10px] text-amber-700/80 dark:text-amber-200/80">
-                                                        {createKeyMutation.isPending && creatingGroup?.group_key === group.group_key ? '创建中...' : '快捷创建'}
+                                                        {createKeyMutation.isPending && creatingGroup?.group_key === group.group_key ? '创建中...' : keyCreationView.canCreateSingle ? '快捷创建' : '不可创建'}
                                                     </span>
                                                 </Button>
                                             ))}
@@ -2459,7 +2471,7 @@ function SiteAccountPanel({
                             type="button"
                             className="rounded-2xl"
                             onClick={handleCreateKey}
-                            disabled={createKeyMutation.isPending || !creatingGroup}
+                            disabled={createKeyMutation.isPending || !creatingGroup || !keyCreationView.canCreateSingle}
                         >
                             <RefreshCw className={cn('size-4', createKeyMutation.isPending && 'animate-spin')} />
                             {createKeyMutation.isPending ? '创建并同步中...' : '创建并同步 Key'}

@@ -157,8 +157,14 @@ func applyDirectCaptureAccountMatch(match *DirectCaptureMatch, account *model.Si
 }
 
 func ConfirmDirectCapture(ctx context.Context, input DirectCapturePersistInput) (*DirectCapturePersistResult, error) {
+	accountName, err := normalizeDirectCaptureAccountName(firstNonEmptyString(input.AccountName, input.Match.AccountName))
+	if err != nil {
+		return nil, err
+	}
+	input.AccountName = accountName
+
 	var result DirectCapturePersistResult
-	err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
 		switch input.Match.Action {
 		case DirectCaptureActionCreateSite:
@@ -221,6 +227,7 @@ func ConfirmDirectCapture(ctx context.Context, input DirectCapturePersistInput) 
 				return directCaptureOpError("direct_capture.conflict", "account changed after preview", http.StatusConflict, "persistence", false, "restart_capture")
 			}
 			updates := siteauth.SuccessUpdates(now)
+			updates["name"] = input.AccountName
 			updates["credential_type"] = model.SiteCredentialTypeAccessToken
 			updates["username"] = ""
 			updates["password"] = ""
@@ -286,7 +293,18 @@ func directCaptureAccountVersion(account *model.SiteAccount) string {
 	if account.PlatformUserID != nil {
 		userID = strconv.Itoa(*account.PlatformUserID)
 	}
-	return directCaptureVersion(strconv.Itoa(account.SiteID), string(account.CredentialType), account.Username, account.Password, account.AccessToken, account.APIKey, account.RefreshToken, strconv.FormatInt(account.TokenExpiresAt, 10), userID, strconv.FormatBool(account.Enabled))
+	return directCaptureVersion(strconv.Itoa(account.SiteID), account.Name, string(account.CredentialType), account.Username, account.Password, account.AccessToken, account.APIKey, account.RefreshToken, strconv.FormatInt(account.TokenExpiresAt, 10), userID, strconv.FormatBool(account.Enabled))
+}
+
+func normalizeDirectCaptureAccountName(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", directCaptureOpError("direct_capture.account_name.invalid", "account name must not be blank", http.StatusBadRequest, "confirmation", false, "edit_account_name")
+	}
+	if len([]rune(value)) > 128 {
+		return "", directCaptureOpError("direct_capture.account_name.invalid", "account name must not exceed 128 characters", http.StatusBadRequest, "confirmation", false, "edit_account_name")
+	}
+	return value, nil
 }
 
 func directCaptureVersion(parts ...string) string {

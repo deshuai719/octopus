@@ -2,6 +2,7 @@ package op
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/bestruirui/octopus/internal/apperror"
@@ -163,7 +164,7 @@ func TestConfirmDirectCaptureRejectsVersionConflictWithoutOverwritingCredential(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := dbpkg.GetDB().Model(&model.SiteAccount{}).Where("id = ?", account.ID).Update("access_token", "changed-after-preview").Error; err != nil {
+	if err := dbpkg.GetDB().Model(&model.SiteAccount{}).Where("id = ?", account.ID).Update("name", "changed-after-preview").Error; err != nil {
 		t.Fatal(err)
 	}
 	_, err = ConfirmDirectCapture(ctx, DirectCapturePersistInput{
@@ -173,8 +174,70 @@ func TestConfirmDirectCaptureRejectsVersionConflictWithoutOverwritingCredential(
 		t.Fatalf("error = %v, code = %q", err, apperror.Code(err))
 	}
 	reloaded, _ := SiteAccountGet(account.ID, ctx)
-	if reloaded.AccessToken != "changed-after-preview" {
-		t.Fatalf("credential was overwritten: %q", reloaded.AccessToken)
+	if reloaded.Name != "changed-after-preview" || reloaded.AccessToken != "original" {
+		t.Fatalf("newer account state was overwritten: name=%q token=%q", reloaded.Name, reloaded.AccessToken)
+	}
+}
+
+func TestConfirmDirectCaptureUpdatesNameAndCredentialAndFeedsNextPreviewAndUI(t *testing.T) {
+	ctx := setupSiteOpTestDB(t)
+	site := createDirectCaptureSite(t, ctx, "https://rename.example")
+	account := createDirectCaptureAccount(t, ctx, model.SiteAccount{
+		SiteID: site.ID, Name: "Octopus 保存名", CredentialType: model.SiteCredentialTypeAccessToken,
+		AccessToken: "old-token", PlatformUserID: directCaptureInt(88), Enabled: true,
+	})
+	identity := DirectCaptureIdentity{CanonicalOrigin: "https://rename.example", Platform: model.SitePlatformNewAPI, PlatformUserID: directCaptureInt(88)}
+	match, err := MatchDirectCapture(ctx, identity, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := strings.Repeat("名", 128)
+	if _, err := ConfirmDirectCapture(ctx, DirectCapturePersistInput{
+		Match: *match, CanonicalOrigin: identity.CanonicalOrigin, Platform: identity.Platform,
+		AccountName: name, AccessToken: "new-token", PlatformUserID: identity.PlatformUserID,
+	}); err != nil {
+		t.Fatalf("ConfirmDirectCapture() error = %v", err)
+	}
+
+	reloaded, err := SiteAccountGet(account.ID, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Name != name || reloaded.AccessToken != "new-token" {
+		t.Fatalf("account update was not atomic: name=%q token=%q", reloaded.Name, reloaded.AccessToken)
+	}
+	nextMatch, err := MatchDirectCapture(ctx, identity, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	channelView, err := SiteChannelAccountGet(site.ID, account.ID, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nextMatch.AccountName != name || channelView.AccountName != name {
+		t.Fatalf("name drifted across next preview/UI: preview=%q ui=%q", nextMatch.AccountName, channelView.AccountName)
+	}
+}
+
+func TestConfirmDirectCaptureRejectsAccountNameOver128Characters(t *testing.T) {
+	ctx := setupSiteOpTestDB(t)
+	site := createDirectCaptureSite(t, ctx, "https://long-name.example")
+	account := createDirectCaptureAccount(t, ctx, model.SiteAccount{SiteID: site.ID, Name: "original", CredentialType: model.SiteCredentialTypeAccessToken, AccessToken: "old-token", Enabled: true})
+	identity := DirectCaptureIdentity{CanonicalOrigin: "https://long-name.example", Platform: model.SitePlatformNewAPI}
+	match, err := MatchDirectCapture(ctx, identity, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ConfirmDirectCapture(ctx, DirectCapturePersistInput{
+		Match: *match, CanonicalOrigin: identity.CanonicalOrigin, Platform: identity.Platform,
+		AccountName: strings.Repeat("a", 129), AccessToken: "must-not-win",
+	})
+	if !apperror.IsCode(err, "direct_capture.account_name.invalid") {
+		t.Fatalf("error = %v, code = %q", err, apperror.Code(err))
+	}
+	reloaded, _ := SiteAccountGet(account.ID, ctx)
+	if reloaded.Name != "original" || reloaded.AccessToken != "old-token" {
+		t.Fatalf("invalid name changed the account: name=%q token=%q", reloaded.Name, reloaded.AccessToken)
 	}
 }
 

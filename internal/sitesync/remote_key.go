@@ -179,8 +179,8 @@ func mutateSub2APIToken(ctx context.Context, siteRecord *model.Site, account *mo
 			}
 			continue
 		}
-		if message := strings.TrimSpace(extractSiteResponseMessage(payload)); message != "" && !siteTokenCreateSucceeded(payload) {
-			return fmt.Errorf("%s", message)
+		if err := validateSub2APIMutationResponse(payload); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -188,4 +188,20 @@ func mutateSub2APIToken(ctx context.Context, siteRecord *model.Site, account *mo
 		return firstErr
 	}
 	return fmt.Errorf("sub2api remote key mutation failed")
+}
+
+func validateSub2APIMutationResponse(payload map[string]any) error {
+	if rawCode, ok := payload["code"]; ok {
+		if anyToInt64(rawCode) == 0 {
+			return nil
+		}
+		return fmt.Errorf("%s", firstNonEmptyString(strings.TrimSpace(extractSiteResponseMessage(payload)), "sub2api remote key mutation failed"))
+	}
+	if _, ok := payload["success"]; ok {
+		if siteTokenCreateSucceeded(payload) {
+			return nil
+		}
+		return fmt.Errorf("%s", firstNonEmptyString(strings.TrimSpace(extractSiteResponseMessage(payload)), "sub2api remote key mutation failed"))
+	}
+	return nil
 }

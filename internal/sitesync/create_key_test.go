@@ -15,6 +15,7 @@ func TestCreateAccountTokenCreatesManagedKeyAndSyncsAccount(t *testing.T) {
 	ctx := setupProjectTestDB(t)
 
 	var createdBody map[string]any
+	created := false
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -36,11 +37,16 @@ func TestCreateAccountTokenCreatesManagedKeyAndSyncsAccount(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&createdBody); err != nil {
 				t.Fatalf("decode create token body failed: %v", err)
 			}
+			created = true
 			_, _ = w.Write([]byte(`{"success":true,"data":{"id":1}}`))
 		case r.URL.Path == "/api/token/" && r.Method == http.MethodGet:
 			if r.Header.Get("Authorization") != "Bearer test-access-token" || r.Header.Get("New-API-User") != "11494" {
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write([]byte(`{"success":false,"message":"无权进行此操作，未提供 New-Api-User"}`))
+				return
+			}
+			if !created {
+				_, _ = w.Write([]byte(`{"data":{"items":[]}}`))
 				return
 			}
 			_, _ = w.Write([]byte(`{"data":{"items":[{"name":"vip-created","key":"managed-created-key","group":"vip","status":1}]}}`))
@@ -79,6 +85,7 @@ func TestCreateAccountTokenCreatesManagedKeyAndSyncsAccount(t *testing.T) {
 		Name:           "managed-create-account",
 		CredentialType: model.SiteCredentialTypeAccessToken,
 		AccessToken:    "test-access-token",
+		PlatformUserID: intPointer(11494),
 		Enabled:        true,
 		AutoSync:       true,
 	}
@@ -86,11 +93,11 @@ func TestCreateAccountTokenCreatesManagedKeyAndSyncsAccount(t *testing.T) {
 		t.Fatalf("SiteAccountCreate failed: %v", err)
 	}
 
-	result, err := CreateAccountToken(ctx, account.ID, model.SiteChannelKeyCreateRequest{GroupKey: "vip"})
+	result, err := CreateAccountToken(ctx, site.ID, account.ID, model.SiteChannelKeyCreateRequest{GroupKey: "vip"})
 	if err != nil {
 		t.Fatalf("CreateAccountToken returned error: %v", err)
 	}
-	if result == nil || result.TokenCount != 1 {
+	if result == nil || result.Status != model.SiteKeyCreateStatusCreated || result.Account == nil || len(result.Account.Groups) != 1 || !result.Account.Groups[0].HasKeys {
 		t.Fatalf("unexpected sync result: %+v", result)
 	}
 	if createdBody["group"] != "vip" {
@@ -100,8 +107,8 @@ func TestCreateAccountTokenCreatesManagedKeyAndSyncsAccount(t *testing.T) {
 		t.Fatalf("expected unlimited_quota=true, got %#v", createdBody["unlimited_quota"])
 	}
 	createdName, _ := createdBody["name"].(string)
-	if createdName != "vip" {
-		t.Fatalf("expected generated token name to use the group key without prefixes, got %q", createdName)
+	if createdName != "VIP" {
+		t.Fatalf("expected generated token name to use the group display name without prefixes, got %q", createdName)
 	}
 
 	reloaded, err := op.SiteAccountGet(account.ID, ctx)
@@ -123,6 +130,7 @@ func TestCreateAccountTokenCreatesSub2APIKeyAndSyncsAccount(t *testing.T) {
 	ctx := setupProjectTestDB(t)
 
 	var createdBody map[string]any
+	created := false
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -137,14 +145,23 @@ func TestCreateAccountTokenCreatesSub2APIKeyAndSyncsAccount(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&createdBody); err != nil {
 				t.Fatalf("decode sub2api create body failed: %v", err)
 			}
-			_, _ = w.Write([]byte(`{"success":true,"data":{"id":31}}`))
+			created = true
+			_, _ = w.Write([]byte(`{"code":0,"data":{"id":31}}`))
 		case r.URL.Path == "/api/v1/keys":
 			if r.Header.Get("Authorization") != "Bearer sub2api-token" {
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write([]byte(`{"success":false,"message":"unauthorized"}`))
 				return
 			}
-			_, _ = w.Write([]byte(`{"data":[{"name":"sub2api-created","key":"sub2api-created-key","group_id":"7","group_name":"VIP 7","status":1}]}`))
+			if !created {
+				_, _ = w.Write([]byte(`{"code":0,"data":[]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"code":0,"data":[{"name":"sub2api-created","key":"sub2api-created-key","group_id":"7","group_name":"VIP 7","status":1}]}`))
+		case r.URL.Path == "/api/v1/groups/available":
+			_, _ = w.Write([]byte(`{"code":0,"data":[{"id":7,"name":"VIP 7"}]}`))
+		case r.URL.Path == "/api/v1/groups/rates":
+			_, _ = w.Write([]byte(`{"code":0,"data":{}}`))
 		case r.URL.Path == "/models":
 			if r.Header.Get("Authorization") != "Bearer sub2api-created-key" {
 				w.WriteHeader(http.StatusUnauthorized)
@@ -180,14 +197,14 @@ func TestCreateAccountTokenCreatesSub2APIKeyAndSyncsAccount(t *testing.T) {
 		t.Fatalf("SiteAccountCreate failed: %v", err)
 	}
 
-	result, err := CreateAccountToken(context.Background(), account.ID, model.SiteChannelKeyCreateRequest{
+	result, err := CreateAccountToken(context.Background(), site.ID, account.ID, model.SiteChannelKeyCreateRequest{
 		GroupKey: "7",
 		Name:     "manual-sub2api-name",
 	})
 	if err != nil {
 		t.Fatalf("CreateAccountToken returned error: %v", err)
 	}
-	if result == nil || result.TokenCount != 1 {
+	if result == nil || result.Status != model.SiteKeyCreateStatusCreated || result.Account == nil || len(result.Account.Groups) != 1 || !result.Account.Groups[0].HasKeys {
 		t.Fatalf("unexpected sync result: %+v", result)
 	}
 	if createdBody["group_id"] != float64(7) && createdBody["group_id"] != 7 {
@@ -240,7 +257,7 @@ func TestCreateAccountTokenReportsAuthenticationFailures(t *testing.T) {
 		t.Fatalf("SiteAccountCreate failed: %v", err)
 	}
 
-	if _, err := CreateAccountToken(ctx, account.ID, model.SiteChannelKeyCreateRequest{GroupKey: "vip"}); err == nil {
+	if _, err := CreateAccountToken(ctx, site.ID, account.ID, model.SiteChannelKeyCreateRequest{GroupKey: "vip"}); err == nil {
 		t.Fatal("first key creation should fail")
 	}
 	first, err := op.SiteAccountGet(account.ID, ctx)
@@ -251,7 +268,7 @@ func TestCreateAccountTokenReportsAuthenticationFailures(t *testing.T) {
 		t.Fatalf("first auth transition = status %q failures %d", first.AuthStatus, first.ConsecutiveAuthFailures)
 	}
 
-	if _, err := CreateAccountToken(ctx, account.ID, model.SiteChannelKeyCreateRequest{GroupKey: "vip"}); err == nil {
+	if _, err := CreateAccountToken(ctx, site.ID, account.ID, model.SiteChannelKeyCreateRequest{GroupKey: "vip"}); err == nil {
 		t.Fatal("second key creation should fail")
 	}
 	second, err := op.SiteAccountGet(account.ID, ctx)
@@ -261,7 +278,7 @@ func TestCreateAccountTokenReportsAuthenticationFailures(t *testing.T) {
 	if second.AuthStatus != model.SiteAuthStatusReauthRequired || second.ConsecutiveAuthFailures != 2 {
 		t.Fatalf("second auth transition = status %q failures %d", second.AuthStatus, second.ConsecutiveAuthFailures)
 	}
-	if second.AuthFailureStage != "create_key" || second.AuthFailureCode != CodeSiteAuthCredentialExpired {
+	if second.AuthFailureStage != "sync" || second.AuthFailureCode != CodeSiteAuthCredentialExpired {
 		t.Fatalf("second auth failure = stage %q code %q", second.AuthFailureStage, second.AuthFailureCode)
 	}
 }
@@ -280,5 +297,8 @@ func TestSiteTokenCreateSucceededFromAnyRequiresExplicitPrimitiveTrue(t *testing
 	}
 	if !siteTokenCreateSucceededFromAny(true) {
 		t.Fatalf("expected boolean true primitive to be successful")
+	}
+	if siteTokenCreateSucceededFromAny(map[string]any{"data": map[string]any{"id": 1}}) {
+		t.Fatal("map without an explicit success field must not be treated as successful")
 	}
 }
