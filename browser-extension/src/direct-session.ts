@@ -10,6 +10,7 @@ export type DirectSessionIndexItem = {
   evidence?: PlatformEvidence[];
   platform_user_id?: number;
   identity_label?: string;
+  page_title?: string;
   capture_id?: string;
   phase: string;
   expires_at: string;

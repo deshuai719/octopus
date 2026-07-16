@@ -258,4 +258,49 @@ describe("direct capture worker flow", () => {
     expect(JSON.stringify(sessionValues)).not.toContain("candidate-secret-test-value");
     expect(messageHandler).toBeTypeOf("function");
   });
+
+  it("retries confirmation without add_tags against a strict legacy backend", async () => {
+    sessionValues.octopusDirectCaptureIndexV1 = {
+      "https://relay.example": {
+        origin: "https://relay.example",
+        operation_id: "operation-confirm",
+        capture_id: "capture-id",
+        phase: "preview_ready",
+        expires_at: "2099-01-01T00:00:00Z",
+        generation_attempted: false,
+        page_title: "Ciallo~(∠・ω< )⌒☆",
+      },
+    };
+    fetchMock.mockReset()
+      .mockResolvedValueOnce(responseAt("https://octopus.example/api/v1/site/direct-capture/capture-id/confirm", JSON.stringify({
+        error_code: "common.invalid_json",
+        message: "invalid direct capture confirmation payload",
+      }), { status: 400 }))
+      .mockResolvedValueOnce(responseAt("https://octopus.example/api/v1/site/direct-capture/capture-id/confirm", JSON.stringify({ data: {
+        capture_id: "capture-id",
+        operation_id: "operation-confirm",
+        origin: "https://relay.example",
+        platform: "new-api",
+        phase: "saved_syncing",
+        expires_at: "2099-01-01T00:00:00Z",
+        saved: { action: "update_account", site_id: 1, account_id: 2 },
+      } }), { status: 200 }));
+    await import("../src/worker");
+
+    const response = await new Promise<WorkerResponse>((resolve) => {
+      messageHandler!({
+        type: "confirm_direct_capture",
+        origin: "https://relay.example",
+        capture_id: "capture-id",
+        preview_version: "preview-version",
+        account_name: "Ciallo~(∠・ω< )⌒☆",
+        add_tags: ["公益"],
+      }, {} as chrome.runtime.MessageSender, resolve);
+    });
+
+    expect(response).toMatchObject({ ok: true, capture: { phase: "saved_syncing", page_title: "Ciallo~(∠・ω< )⌒☆", tag_update_supported: false } });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toHaveProperty("add_tags");
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).not.toHaveProperty("add_tags");
+  });
 });

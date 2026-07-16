@@ -124,6 +124,8 @@ export type DirectCaptureView = {
   sync_result?: { status: string; message: string };
   error_code?: string;
   error_message?: string;
+  page_title?: string;
+  tag_update_supported?: boolean;
 };
 
 export type DirectCaptureSummaryItem = {

@@ -19,10 +19,15 @@ describe("side panel visibility contract", () => {
     expect(sidepanelScript).toContain('matchedAccount.textContent = capture.account_name || capture.candidate?.identity_label || "—"');
   });
 
-  it("edits an existing account using the Octopus-saved name as the default", () => {
-    expect(sidepanelScript).toContain('accountNameInput.value = capture.account_name || capture.candidate?.identity_label || "默认账号"');
+  it("edits an existing account using the visible page title before saved identity fallbacks", () => {
+    expect(sidepanelScript).toContain('accountNameInput.value = capture.page_title || capture.account_name || capture.candidate?.identity_label || "默认账号"');
     expect(sidepanelScript).toContain('["create_site_account", "create_account", "update_account"].includes(capture.action ?? "")');
     expect(sidepanelHTML).toContain('id="account-name" maxlength="128"');
+  });
+
+  it("uses the visible page title as the account-name default and reports legacy tag fallback", () => {
+    expect(sidepanelScript).toContain("capture.page_title || capture.account_name");
+    expect(sidepanelScript).toContain("后端版本暂不支持导入标签");
   });
 
   it("clears previous matched values before switching capture context", () => {

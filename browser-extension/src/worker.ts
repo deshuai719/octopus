@@ -155,11 +155,35 @@ async function extractDirectCandidate(tabId: number, origin: string, platform: P
   return { kind: "candidate", candidate: { access_token: cookie.value, platform_user_id: result.candidate.platform_user_id, identity_label: result.candidate.identity_label } };
 }
 
-async function submitDirectPreview(binding: OctopusBinding, operationID: string, origin: string, platform: Platform, evidence: DirectCaptureCandidate["evidence"], extracted: ExtractResult): Promise<WorkerResponse> {
+function normalizedPageTitle(value?: string): string | undefined {
+  const title = value?.trim();
+  if (!title) return undefined;
+  return Array.from(title).slice(0, 128).join("");
+}
+
+async function confirmDirectCapture(
+  binding: OctopusBinding,
+  path: string,
+  operationID: string,
+  body: Record<string, unknown>,
+): Promise<DirectCaptureView> {
+  try {
+    return await octopusAPI<DirectCaptureView>(binding, path, operationID, { method: "POST", body: JSON.stringify(body) });
+  } catch (error) {
+    const code = (error as { error_code?: string })?.error_code;
+    if (code !== "common.invalid_json" || !("add_tags" in body)) throw error;
+    const legacyBody = { ...body };
+    delete legacyBody.add_tags;
+    const capture = await octopusAPI<DirectCaptureView>(binding, path, operationID, { method: "POST", body: JSON.stringify(legacyBody) });
+    return { ...capture, tag_update_supported: false };
+  }
+}
+
+async function submitDirectPreview(binding: OctopusBinding, operationID: string, origin: string, platform: Platform, evidence: DirectCaptureCandidate["evidence"], extracted: ExtractResult, pageTitle?: string): Promise<WorkerResponse> {
   if (extracted.kind !== "candidate") return { ok: extracted.kind !== "error", result: extracted };
   const candidate: DirectCaptureCandidate = { origin, platform, evidence, ...extracted.candidate };
-  const capture = await octopusAPI<DirectCaptureView>(binding, "/api/v1/site/direct-capture/preview", operationID, { method: "POST", body: JSON.stringify(candidate) });
-  await putDirectSession({ origin, operation_id: operationID, platform, capture_id: capture.capture_id, phase: capture.phase, expires_at: capture.expires_at, generation_attempted: extracted.generated_system_token === true, capture });
+  const capture = { ...await octopusAPI<DirectCaptureView>(binding, "/api/v1/site/direct-capture/preview", operationID, { method: "POST", body: JSON.stringify(candidate) }), page_title: normalizedPageTitle(pageTitle) };
+  await putDirectSession({ origin, operation_id: operationID, platform, page_title: capture.page_title, capture_id: capture.capture_id, phase: capture.phase, expires_at: capture.expires_at, generation_attempted: extracted.generated_system_token === true, capture });
   await revokeDirectPermission(origin);
   await notifyPanel({ type: "direct_capture_updated", origin, capture });
   return {
@@ -171,7 +195,7 @@ async function submitDirectPreview(binding: OctopusBinding, operationID: string,
   };
 }
 
-async function startDirectCapture(tabId: number, origin: string): Promise<WorkerResponse> {
+async function startDirectCapture(tabId: number, origin: string, pageTitle?: string): Promise<WorkerResponse> {
   const binding = await getOctopusBinding();
   if (!binding) throw new Error("尚未初始化 Octopus，请先在已登录 Octopus 页面点击扩展");
   if (bindingExpired(binding)) throw new Error("Octopus 管理员 JWT 已过期，请回到 Octopus 页面重新初始化");
@@ -199,6 +223,7 @@ async function startDirectCapture(tabId: number, origin: string): Promise<Worker
       evidence: discovery.evidence,
       platform_user_id: extracted.platform_user_id,
       identity_label: extracted.identity_label,
+      page_title: normalizedPageTitle(pageTitle),
       phase: "credential_generation",
       expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
       generation_attempted: false,
@@ -210,7 +235,7 @@ async function startDirectCapture(tabId: number, origin: string): Promise<Worker
     await revokeDirectPermission(origin);
     return { ok: false, mode: "direct", origin, result: extracted, message: extracted.message };
   }
-  return submitDirectPreview(binding, operationID, origin, discovery.platform, discovery.evidence, extracted);
+  return submitDirectPreview(binding, operationID, origin, discovery.platform, discovery.evidence, extracted, pageTitle);
 }
 
 async function routeClickedTab(tab: chrome.tabs.Tab, permissionPromise: Promise<boolean>): Promise<WorkerResponse> {
@@ -225,7 +250,7 @@ async function routeClickedTab(tab: chrome.tabs.Tab, permissionPromise: Promise<
     if (pageAuth) {
       return initializeOctopusBinding(origin, pageAuth);
     }
-    const response = await startDirectCapture(tab.id, origin);
+    const response = await startDirectCapture(tab.id, origin, tab.title);
     if (!response.ok) throw new Error(response.message ?? "直接捕获失败");
     return response;
   } catch (error) {
@@ -382,7 +407,7 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, _sender, sendRespo
         const extracted = await extractDirectCandidate(tab.id, request.origin, indexed.platform, evidence, true);
         const binding = await getOctopusBinding();
         if (!binding) throw new Error("Octopus 绑定不存在");
-        const response = await submitDirectPreview(binding, indexed.operation_id, request.origin, indexed.platform, evidence, extracted);
+        const response = await submitDirectPreview(binding, indexed.operation_id, request.origin, indexed.platform, evidence, extracted, indexed.page_title);
         sendResponse(response);
         return;
       }
@@ -400,7 +425,7 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, _sender, sendRespo
             platform_user_id: indexed.platform_user_id,
             identity_label: indexed.identity_label,
           },
-        });
+        }, indexed.page_title);
         sendResponse(response);
         return;
       }
@@ -425,7 +450,10 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, _sender, sendRespo
           path = `/api/v1/site/direct-capture/${encodeURIComponent(request.capture_id)}/retry-sync`;
           body = {};
         }
-        const capture = await octopusAPI<DirectCaptureView>(binding, path, indexed.operation_id, { method: "POST", body: JSON.stringify(body) });
+        const responseCapture = request.type === "confirm_direct_capture"
+          ? await confirmDirectCapture(binding, path, indexed.operation_id, body)
+          : await octopusAPI<DirectCaptureView>(binding, path, indexed.operation_id, { method: "POST", body: JSON.stringify(body) });
+        const capture = { ...responseCapture, page_title: indexed.page_title ?? indexed.capture?.page_title };
         if (shouldRemoveDirectSession(capture.phase)) await removeDirectSession(request.origin);
         else await putDirectSession({ ...indexed, capture_id: capture.capture_id, phase: capture.phase, expires_at: capture.expires_at, capture });
         if (["completed", "sync_failed", "canceled", "failed", "conflict", "expired"].includes(capture.phase)) {

@@ -177,7 +177,7 @@ function renderCapture(capture: DirectCaptureView): void {
   credentialMask.textContent = capture.candidate?.access_token_mask ?? "已在确认后清除";
   platformUserID.textContent = capture.candidate?.platform_user_id?.toString() ?? "未提供";
   siteNameInput.value = capture.site_name ?? "";
-  accountNameInput.value = capture.account_name || capture.candidate?.identity_label || "默认账号";
+  accountNameInput.value = capture.page_title || capture.account_name || capture.candidate?.identity_label || "默认账号";
   matchedSite.textContent = capture.site_name || "—";
   matchedSiteRow.hidden = !capture.site_name;
   matchedAccount.textContent = capture.account_name || capture.candidate?.identity_label || "—";
@@ -203,6 +203,7 @@ function renderCapture(capture: DirectCaptureView): void {
   if (capture.site_archived) warnings.push("确认后将恢复归档站点，但不会自动启用路由。");
   if (capture.site_enabled === false || capture.account_enabled === false) warnings.push("站点或账号仍处于禁用状态，保存后不会自动加入路由。");
   if (capture.credential_migration) warnings.push("确认后凭据将从用户名密码切换为访问令牌，旧密码会被清除。");
+  if (capture.tag_update_supported === false) warnings.push("当前 Octopus 后端版本暂不支持导入标签；账号已保存，但标签未随本次导入更新。");
   captureWarning.textContent = warnings.join(" ");
   captureWarning.hidden = warnings.length === 0;
   renderTransferProgress(capture.phase);
