@@ -25,6 +25,16 @@ import {
 } from "./direct-session";
 import { clearLegacyRecoveryState } from "./legacy-cleanup";
 import { detectCurrentPlatform, PLATFORM_STATUS_SIGNATURES } from "./platform-detect";
+import {
+  UPDATE_ALARM_NAME,
+  UPDATE_ALARM_PERIOD_MINUTES,
+  checkForExtensionUpdate,
+  loadUpdateState,
+  refreshUpdaterStatus,
+  rollbackExtensionUpdate,
+  selectExtensionTarget,
+  startExtensionUpdate,
+} from "./updater";
 import type {
   DirectCaptureCandidate,
   DirectCaptureView,
@@ -40,6 +50,24 @@ let pendingReplacement: OctopusBinding | undefined;
 const PENDING_REPLACEMENT_ORIGIN_KEY = "octopusPendingReplacementOriginV1";
 const PENDING_REPLACEMENT_EXPIRY_ALARM = "octopus-pending-replacement-expiry";
 const DIRECT_PERMISSION_ALARM_PREFIX = "octopus-direct-permission:";
+
+function isUpdaterRequest(request: WorkerRequest): boolean {
+  return [
+    "get_extension_update_state",
+    "refresh_extension_updater_status",
+    "check_extension_update",
+    "update_extension",
+    "rollback_extension",
+    "select_extension_target",
+  ].includes(request.type);
+}
+
+if (typeof chrome.runtime.getManifest === "function" && typeof chrome.runtime.connectNative === "function") {
+  void chrome.alarms.create(UPDATE_ALARM_NAME, { periodInMinutes: UPDATE_ALARM_PERIOD_MINUTES });
+  void refreshUpdaterStatus().then((state) => {
+    if (state.phase !== "host_required" && state.phase !== "target_required") void checkForExtensionUpdate(false);
+  });
+}
 
 async function refreshDirectCaptureSummary(): Promise<void> {
   const binding = await getOctopusBinding();
@@ -275,6 +303,10 @@ chrome.action.onClicked.addListener((tab) => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === UPDATE_ALARM_NAME) {
+    void checkForExtensionUpdate(false);
+    return;
+  }
   if (alarm.name === PENDING_REPLACEMENT_EXPIRY_ALARM) {
     void (async () => {
       const stored = await chrome.storage.session.get(PENDING_REPLACEMENT_ORIGIN_KEY);
@@ -302,6 +334,35 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.runtime.onMessage.addListener((request: WorkerRequest, _sender, sendResponse: (response: WorkerResponse) => void) => {
   void (async () => {
     try {
+      if (request.type === "get_extension_update_state") {
+        sendResponse({ ok: true, update: await loadUpdateState() });
+        return;
+      }
+      if (request.type === "refresh_extension_updater_status") {
+        sendResponse({ ok: true, update: await refreshUpdaterStatus() });
+        return;
+      }
+      if (request.type === "check_extension_update") {
+        sendResponse({ ok: true, update: await checkForExtensionUpdate(request.force === true) });
+        return;
+      }
+      if (request.type === "update_extension") {
+        const result = await startExtensionUpdate();
+        sendResponse({ ok: result.state.phase !== "error", update: result.state, reload_required: result.reload });
+        if (result.reload) setTimeout(() => chrome.runtime.reload(), 500);
+        return;
+      }
+      if (request.type === "rollback_extension") {
+        const result = await rollbackExtensionUpdate();
+        sendResponse({ ok: result.state.phase !== "error", update: result.state, reload_required: result.reload });
+        if (result.reload) setTimeout(() => chrome.runtime.reload(), 500);
+        return;
+      }
+      if (request.type === "select_extension_target") {
+        const update = await selectExtensionTarget();
+        sendResponse({ ok: update.phase !== "error", update });
+        return;
+      }
       if (request.type === "capture_active_session") {
         let tab: chrome.tabs.Tab;
         try {
@@ -477,6 +538,10 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, _sender, sendRespo
       throw new Error("扩展请求类型不受支持");
     } catch (error) {
       const message = sanitizeDiagnosticMessage(error);
+      if (isUpdaterRequest(request)) {
+        sendResponse({ ok: false, message });
+        return;
+      }
       const origin = "origin" in request && typeof request.origin === "string" ? request.origin : undefined;
       try {
         const indexed = origin ? await getDirectSession(origin) : undefined;

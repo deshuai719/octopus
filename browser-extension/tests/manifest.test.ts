@@ -14,13 +14,14 @@ async function extensionIDFromPublicKey(publicKey: string): Promise<string> {
 describe("manifest security policy", () => {
   it("keeps the published extension identity stable", async () => {
     expect(await extensionIDFromPublicKey(manifest.key)).toBe(EXPECTED_EXTENSION_ID);
-    expect(manifest.version).toBe("0.2.0");
+    expect(manifest.version).toBe("0.3.0");
   });
 
   it("uses optional origins without permanent broad or debugger access", () => {
     expect(manifest).not.toHaveProperty("host_permissions");
     expect(manifest.permissions).not.toContain("debugger");
     expect(manifest.permissions).not.toContain("<all_urls>");
+    expect(manifest.permissions).toEqual(expect.arrayContaining(["nativeMessaging", "downloads", "downloads.open"]));
     expect(manifest.optional_host_permissions).toEqual(["https://*/*", "http://*/*"]);
   });
 

@@ -107,6 +107,25 @@ h1 { margin: 0; font-size: 20px; line-height: 1.15; letter-spacing: 0; }
 .summary-actions { display: flex; gap: 6px; margin-top: 8px; }
 .summary-actions button { min-height: 30px; padding: 5px 8px; font-size: 10px; }
 
+.extension-update { margin-top: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: white; }
+.update-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.update-heading strong { display: block; margin-top: 5px; font-size: 12px; }
+.update-heading code { color: var(--cobalt); }
+.update-badge { flex: none; padding: 4px 7px; border-radius: 999px; background: var(--line); color: var(--muted); font-size: 9px; font-weight: 700; }
+.extension-update[data-phase="update_available"] .update-badge { background: color-mix(in srgb, var(--cobalt) 16%, white); color: var(--cobalt); }
+.extension-update[data-phase="updated"] .update-badge,
+.extension-update[data-phase="ready"] .update-badge { background: color-mix(in srgb, var(--mint) 18%, white); color: var(--mint); }
+.extension-update[data-phase="error"] .update-badge { background: color-mix(in srgb, var(--danger) 16%, white); color: var(--danger); }
+.update-message { margin: 10px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.update-version-row { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; padding: 8px 9px; border-radius: 6px; background: color-mix(in srgb, var(--paper) 72%, white); font-size: 11px; }
+.update-version-row span { color: var(--muted); }
+.update-targets { display: grid; gap: 5px; margin-top: 10px; }
+.update-target { display: grid; gap: 2px; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 10px; }
+.update-target strong { color: var(--ink); }
+.update-target code { color: var(--muted); overflow-wrap: anywhere; }
+.update-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 11px; }
+.update-actions button { min-height: 34px; padding: 6px 8px; font-size: 10px; }
+
 .actions { display: grid; gap: 9px; margin-top: 16px; }
 button { min-height: 42px; border: 0; border-radius: 8px; padding: 10px 14px; font: 650 13px/1.25 system-ui, sans-serif; cursor: pointer; transition: transform 120ms ease, opacity 120ms ease; }
 button:hover:not(:disabled) { transform: translateY(-1px); }
@@ -119,7 +138,7 @@ footer { margin-top: 18px; color: var(--muted); font-size: 10px; line-height: 1.
 
 @media (prefers-color-scheme: dark) {
   :root { --paper: #0b1420; --ink: #eef5fc; --muted: #a6b4c3; --line: #2b3b4e; }
-  .passport, .secondary, .import-summary { background: #132235; }
+  .passport, .secondary, .import-summary, .extension-update { background: #132235; }
   .endpoint { border-color: #30455d; background: #1d3048; }
   .endpoint code { color: #c2d2e3; }
   .steps { color: #c2d2e3; }

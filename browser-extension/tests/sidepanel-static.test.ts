@@ -58,7 +58,17 @@ describe("side panel visibility contract", () => {
     expect(sidepanelScript).toContain('type: "get_direct_capture_summary"');
     expect(sidepanelScript).toContain('type: "open_direct_capture_origin"');
     expect(sidepanelScript).toContain('add_tags: [siteBillingTag.value, ...customTags]');
-    expect(sidepanelScript).toContain('areaName !== "session"');
+    expect(sidepanelScript).toContain('areaName === "session" && "octopusDirectCaptureIndexV1" in changes');
+  });
+
+  it("renders a separate extension updater without mixing credential diagnostics", () => {
+    for (const field of ["extension-update", "update-current-version", "update-message", "check-extension-update", "run-extension-update", "select-extension-target", "rollback-extension-update"]) {
+      expect(sidepanelHTML).toContain(`id="${field}"`);
+    }
+    expect(sidepanelScript).toContain('type: "check_extension_update"');
+    expect(sidepanelScript).toContain("prepareBundledUpdaterDownload()");
+    expect(sidepanelScript).toContain("openBundledUpdater(state.installer_download_id)");
+    expect(sidepanelScript).toContain('areaName === "local" && UPDATE_STATE_KEY in changes');
   });
 
   it("keeps validation failures on the real progress instead of a decorative rail", () => {

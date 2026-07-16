@@ -106,6 +106,28 @@
         <div id="summary-list" class="summary-list"></div>
       </section>
 
+      <section id="extension-update" class="extension-update" aria-live="polite">
+        <div class="update-heading">
+          <div>
+            <p class="section-label">扩展更新</p>
+            <strong>当前版本 <code id="update-current-version">—</code></strong>
+          </div>
+          <span id="update-badge" class="update-badge">未检查</span>
+        </div>
+        <p id="update-message" class="update-message">正在读取自动更新状态。</p>
+        <div id="update-version-row" class="update-version-row" hidden>
+          <span>可用版本</span>
+          <code id="update-latest-version">—</code>
+        </div>
+        <div id="update-targets" class="update-targets" hidden></div>
+        <div class="update-actions">
+          <button id="check-extension-update" class="quiet">检查更新</button>
+          <button id="run-extension-update" class="secondary">启用自动更新</button>
+          <button id="select-extension-target" class="quiet" hidden>选择扩展目录</button>
+          <button id="rollback-extension-update" class="quiet" hidden>回滚上一版本</button>
+        </div>
+      </section>
+
       <div class="actions">
         <button id="primary-action" class="primary">读取当前标签页</button>
         <button id="secondary-action" class="secondary" hidden></button>

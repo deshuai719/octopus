@@ -4,6 +4,14 @@ import { clearDiagnostics, formatDiagnostics, listDiagnostics } from "./diagnost
 import { readingView, submittingView, waitingView } from "./panel-state";
 import type { PanelPrimaryAction, PanelView } from "./panel-state";
 import { captureActionLabel, captureReceiptFor, transferProgressForPhase } from "./capture-progress";
+import {
+  UPDATE_STATE_KEY,
+  type ExtensionUpdateState,
+  loadUpdateState,
+  openBundledUpdater,
+  patchUpdateState,
+  prepareBundledUpdaterDownload,
+} from "./updater";
 import type { DirectCaptureSummaryItem, DirectCaptureView, SessionEvent, WorkerRequest, WorkerResponse } from "./types";
 
 const status = document.querySelector<HTMLElement>("#status")!;
@@ -53,6 +61,17 @@ const siteExistingTags = document.querySelector<HTMLElement>("#site-existing-tag
 const summaryCounts = document.querySelector<HTMLElement>("#summary-counts")!;
 const summaryList = document.querySelector<HTMLElement>("#summary-list")!;
 const refreshSummaryButton = document.querySelector<HTMLButtonElement>("#refresh-summary")!;
+const extensionUpdate = document.querySelector<HTMLElement>("#extension-update")!;
+const updateCurrentVersion = document.querySelector<HTMLElement>("#update-current-version")!;
+const updateBadge = document.querySelector<HTMLElement>("#update-badge")!;
+const updateMessage = document.querySelector<HTMLElement>("#update-message")!;
+const updateVersionRow = document.querySelector<HTMLElement>("#update-version-row")!;
+const updateLatestVersion = document.querySelector<HTMLElement>("#update-latest-version")!;
+const updateTargets = document.querySelector<HTMLElement>("#update-targets")!;
+const checkExtensionUpdateButton = document.querySelector<HTMLButtonElement>("#check-extension-update")!;
+const runExtensionUpdateButton = document.querySelector<HTMLButtonElement>("#run-extension-update")!;
+const selectExtensionTargetButton = document.querySelector<HTMLButtonElement>("#select-extension-target")!;
+const rollbackExtensionUpdateButton = document.querySelector<HTMLButtonElement>("#rollback-extension-update")!;
 
 let currentCapture: DirectCaptureView | undefined;
 let currentOrigin: string | undefined;
@@ -62,9 +81,87 @@ let summaryTimer: ReturnType<typeof setTimeout> | undefined;
 let summaryGeneration = 0;
 let summaryActiveSince = 0;
 let storageRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+let updaterPollTimer: ReturnType<typeof setTimeout> | undefined;
 
 function send(request: WorkerRequest) {
   return chrome.runtime.sendMessage<WorkerRequest, WorkerResponse>(request);
+}
+
+function updatePhaseLabel(phase: ExtensionUpdateState["phase"]): string {
+  return ({
+    idle: "未检查",
+    checking: "检查中",
+    host_required: "需启用",
+    target_required: "需选目录",
+    ready: "已是最新",
+    update_available: "发现新版",
+    installer_downloading: "准备中",
+    installer_ready: "待运行",
+    installing: "安装中",
+    updating: "更新中",
+    updated: "已更新",
+    rolling_back: "回滚中",
+    rolled_back: "已回滚",
+    error: "失败",
+  } as Record<ExtensionUpdateState["phase"], string>)[phase];
+}
+
+function renderUpdateState(state: ExtensionUpdateState): void {
+  extensionUpdate.dataset.phase = state.phase;
+  updateCurrentVersion.textContent = state.current_version;
+  updateBadge.textContent = updatePhaseLabel(state.phase);
+  updateMessage.textContent = state.message;
+  updateVersionRow.hidden = !state.latest_version;
+  updateLatestVersion.textContent = state.latest_version ?? "—";
+  updateTargets.hidden = state.targets.length === 0;
+  updateTargets.replaceChildren(...state.targets.map((target) => {
+    const item = document.createElement("div");
+    item.className = "update-target";
+    const label = document.createElement("strong");
+    label.textContent = `${target.browser} · ${target.profile}${target.status ? ` · ${target.status}` : ""}`;
+    const path = document.createElement("code");
+    path.textContent = target.path;
+    item.append(label, path);
+    return item;
+  }));
+
+  checkExtensionUpdateButton.disabled = ["checking", "updating", "rolling_back", "installer_downloading"].includes(state.phase);
+  selectExtensionTargetButton.hidden = state.phase !== "target_required";
+  rollbackExtensionUpdateButton.hidden = !["updated", "rolled_back", "error"].includes(state.phase) || state.targets.length === 0;
+  runExtensionUpdateButton.hidden = false;
+  runExtensionUpdateButton.disabled = false;
+  if (state.phase === "host_required") runExtensionUpdateButton.textContent = "启用自动更新";
+  else if (state.phase === "installer_downloading") {
+    runExtensionUpdateButton.textContent = "正在准备";
+    runExtensionUpdateButton.disabled = true;
+  } else if (state.phase === "installer_ready") runExtensionUpdateButton.textContent = "运行初始化程序";
+  else if (state.phase === "installing") runExtensionUpdateButton.textContent = "重新检测助手";
+  else if (state.phase === "target_required") runExtensionUpdateButton.textContent = "选择扩展目录";
+  else if (state.phase === "update_available") runExtensionUpdateButton.textContent = `更新到 ${state.latest_version}`;
+  else if (state.phase === "updating") {
+    runExtensionUpdateButton.textContent = "正在更新";
+    runExtensionUpdateButton.disabled = true;
+  } else if (state.phase === "error" && state.error_code === "updater.host.unavailable") runExtensionUpdateButton.textContent = "重新准备助手";
+  else {
+    runExtensionUpdateButton.textContent = "立即更新";
+    runExtensionUpdateButton.disabled = !state.update_available;
+  }
+}
+
+async function refreshUpdateState(check = false): Promise<void> {
+  const response = await send(check ? { type: "check_extension_update" } : { type: "get_extension_update_state" });
+  if (response.update) renderUpdateState(response.update);
+}
+
+function pollUpdaterInstallation(): void {
+  if (updaterPollTimer) clearTimeout(updaterPollTimer);
+  updaterPollTimer = setTimeout(async () => {
+    const response = await send({ type: "refresh_extension_updater_status" });
+    if (!response.update) return;
+    renderUpdateState(response.update);
+    if (response.update.phase === "host_required") pollUpdaterInstallation();
+    else if (response.update.phase === "ready") void refreshUpdateState(true);
+  }, 2_000);
 }
 
 function renderView(view: PanelView): void {
@@ -505,10 +602,70 @@ clearDiagnosticsButton.addEventListener("click", async () => {
 
 refreshSummaryButton.addEventListener("click", () => { void refreshSummary(true); });
 
+checkExtensionUpdateButton.addEventListener("click", async () => {
+  const response = await send({ type: "check_extension_update", force: true });
+  if (response.update) renderUpdateState(response.update);
+});
+
+runExtensionUpdateButton.addEventListener("click", async () => {
+  const state = await loadUpdateState();
+  if (state.phase === "host_required" || (state.phase === "error" && state.error_code === "updater.host.unavailable")) {
+    renderUpdateState(await prepareBundledUpdaterDownload());
+    return;
+  }
+  if (state.phase === "installer_ready" && state.installer_download_id !== undefined) {
+    try {
+      renderUpdateState(await openBundledUpdater(state.installer_download_id));
+      pollUpdaterInstallation();
+    } catch (error) {
+      renderUpdateState(await patchUpdateState({
+        phase: "error",
+        message: error instanceof Error ? error.message : "无法打开初始化程序",
+        error_code: "updater.installer.open_failed",
+        retryable: true,
+      }));
+    }
+    return;
+  }
+  if (state.phase === "installing") {
+    const response = await send({ type: "refresh_extension_updater_status" });
+    if (response.update) {
+      renderUpdateState(response.update);
+      if (response.update.phase === "host_required") pollUpdaterInstallation();
+      else void refreshUpdateState(true);
+    }
+    return;
+  }
+  if (state.phase === "target_required") {
+    const response = await send({ type: "select_extension_target" });
+    if (response.update) renderUpdateState(response.update);
+    return;
+  }
+  if (state.update_available) {
+    const response = await send({ type: "update_extension" });
+    if (response.update) renderUpdateState(response.update);
+  }
+});
+
+selectExtensionTargetButton.addEventListener("click", async () => {
+  const response = await send({ type: "select_extension_target" });
+  if (response.update) renderUpdateState(response.update);
+});
+
+rollbackExtensionUpdateButton.addEventListener("click", async () => {
+  const response = await send({ type: "rollback_extension" });
+  if (response.update) renderUpdateState(response.update);
+});
+
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== "session" || !("octopusDirectCaptureIndexV1" in changes)) return;
-  if (storageRefreshTimer) clearTimeout(storageRefreshTimer);
-  storageRefreshTimer = setTimeout(() => { void refreshSummary(false); }, 100);
+  if (areaName === "local" && UPDATE_STATE_KEY in changes) {
+    const state = changes[UPDATE_STATE_KEY].newValue as ExtensionUpdateState | undefined;
+    if (state?.version === 1) renderUpdateState(state);
+  }
+  if (areaName === "session" && "octopusDirectCaptureIndexV1" in changes) {
+    if (storageRefreshTimer) clearTimeout(storageRefreshTimer);
+    storageRefreshTimer = setTimeout(() => { void refreshSummary(false); }, 100);
+  }
 });
 
 chrome.tabs.onActivated.addListener(() => { void refreshActiveContext(); });
@@ -519,3 +676,5 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 renderView(readingView());
 void refreshActiveContext();
 void refreshSummary(true);
+void loadUpdateState().then(renderUpdateState);
+void refreshUpdateState(true);

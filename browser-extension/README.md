@@ -4,6 +4,8 @@
 
 扩展不会在页面加载、标签切换或后台轮询时自动采集。读取、生成令牌和回传都必须由用户点击触发。
 
+扩展采用便携 ZIP + Native Messaging 自动更新，不依赖 Chrome Web Store。更新检查与登录凭据流程完全隔离：更新助手不会读取或接收 Octopus JWT、Cookie、站点 Token 或浏览器登录数据。
+
 ## 安装
 
 ```powershell
@@ -13,9 +15,40 @@ pnpm --dir browser-extension test
 pnpm --dir browser-extension build
 ```
 
+构建机还需要 Go 1.25.x。`pnpm build` 会交叉编译 Windows/amd64 更新助手并将其放入 `browser-extension/dist`，因此最终 `dist` 可直接作为 Chrome/Edge 的已解压扩展目录。
+
 打开浏览器扩展管理页，启用“开发者模式”，选择“加载已解压的扩展”，目录使用 `browser-extension/dist`。Chrome 与 Edge 使用同一构建产物。
 
 仓库提交的是固定公开 manifest key（不含私钥），对应扩展 ID 为 `hcnomejlhhefpnhljgcclhggoljokimn`。重复构建和重新加载解压扩展时 ID 保持一致。
+
+## 首次安装和后续更新
+
+1. 从 GitHub 的 `extension-v<version>` Release 下载 `octopus-extension-<version>.zip`。
+2. 解压到任意普通用户目录；Chrome 和 Edge 可以加载同一个目录，也可以分别加载不同目录。
+3. 在 `chrome://extensions` 或 `edge://extensions` 启用开发者模式，选择“加载已解压的扩展程序”。
+4. 后续打开侧边栏即可看到“扩展更新”。扩展最多每 24 小时后台检查一次，侧边栏检查结果缓存 6 小时；只提示，不会后台安装。
+5. 第一次点击“启用自动更新”时，扩展会校验并准备内置 `octopus-extension-updater.exe`。下载完成后再点击“运行初始化程序”，由 Windows 打开它。
+6. 初始化程序以当前用户权限安装到 `%LOCALAPPDATA%\Octopus\ExtensionUpdater`，并为 Chrome 与 Edge 注册 Native Messaging。用户不需要进入解压目录寻找 EXE。
+7. 以后发现新版本时点击“立即更新”；助手会验证 Ed25519 签名和 SHA-256，备份、替换并回滚失败事务，成功后扩展自动重新加载。
+
+`chrome.downloads.open()` 必须由用户手势触发，因此首次启用固定保留“准备助手”和“运行初始化程序”两个明确阶段。未购买 Windows 代码签名证书时，SmartScreen 仍可能显示“未知发布者”；更新清单签名不能替代 Windows Authenticode 代码签名。
+
+如果自动识别 unpacked 目录失败，点击“选择扩展目录”，在 Windows 文件窗口中选择目标目录里的 `manifest.json`。助手只接受固定 manifest key 和扩展 ID，不提供任意目录写入。
+
+Chrome 与 Edge 加载同一目录时只替换一次；加载不同目录时会更新所有已验证目标。更新失败后可使用“回滚上一版本”。
+
+## 发布扩展
+
+扩展更新只接受同一仓库中 tag 为 `extension-v<version>` 的正式 GitHub Release，并忽略普通服务端 `v<version>` Release、draft 和 prerelease。固定资产为：
+
+- `octopus-extension-update.json`
+- `octopus-extension-update.json.sig`
+- `octopus-extension-<version>.zip`
+- `octopus-extension-updater-windows-amd64.exe`
+
+发布清单使用独立 Ed25519 私钥签名。GitHub Actions secret 名为 `OCTOPUS_EXTENSION_SIGNING_KEY_BASE64`，内容是 PKCS#8 PEM 私钥文件的 base64；仓库和 Release 只包含公钥、签名与哈希，不包含私钥。
+
+发布 tag 必须与 `browser-extension/manifest.json` 版本一致，例如 `extension-v0.3.0`。独立工作流 `.github/workflows/extension-release.yml` 会运行 Go/TypeScript 测试、构建、签名和资产上传，并设置 `make_latest=false`，不改变 Octopus 服务端 Release 的全局 latest。
 
 ## 首次初始化
 

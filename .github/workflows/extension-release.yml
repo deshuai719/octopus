@@ -1,0 +1,87 @@
+name: browser extension release
+
+on:
+  push:
+    tags:
+      - "extension-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing extension-v<version> tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout extension tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG_NAME }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: browser-extension/pnpm-lock.yaml
+
+      - name: Verify tag and install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./browser-extension/manifest.json').version")"
+          test "$TAG_NAME" = "extension-v$version"
+          pnpm --dir browser-extension install --frozen-lockfile
+
+      - name: Test and build
+        run: |
+          go test -timeout 60s ./internal/extensionupdater ./cmd/octopus-extension-updater ./cmd/octopus-extension-release
+          pnpm --dir browser-extension typecheck
+          pnpm --dir browser-extension test
+          pnpm --dir browser-extension build
+
+      - name: Create signed release assets
+        shell: bash
+        env:
+          SIGNING_KEY_BASE64: ${{ secrets.OCTOPUS_EXTENSION_SIGNING_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$SIGNING_KEY_BASE64"
+          umask 077
+          key="$RUNNER_TEMP/octopus-extension-ed25519.pem"
+          printf '%s' "$SIGNING_KEY_BASE64" | base64 -d > "$key"
+          go run ./cmd/octopus-extension-release \
+            --dist browser-extension/dist \
+            --output build/extension-release \
+            --private-key "$key"
+          rm -f "$key"
+
+      - name: Publish extension release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          prerelease: false
+          make_latest: false
+          files: |
+            build/extension-release/octopus-extension-update.json
+            build/extension-release/octopus-extension-update.json.sig
+            build/extension-release/octopus-extension-*.zip
+            build/extension-release/octopus-extension-updater-windows-amd64.exe

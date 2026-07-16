@@ -1,3 +1,5 @@
+import type { ExtensionUpdateState } from "./updater";
+
 export type Platform =
   | "new-api"
   | "one-api"
@@ -44,7 +46,13 @@ export type WorkerRequest =
   | { type: "clear_direct_session"; origin: string }
   | { type: "get_direct_capture_summary"; refresh_active?: boolean }
   | { type: "open_direct_capture_origin"; origin: string }
-  | { type: "clear_diagnostics" };
+  | { type: "clear_diagnostics" }
+  | { type: "get_extension_update_state" }
+  | { type: "refresh_extension_updater_status" }
+  | { type: "check_extension_update"; force?: boolean }
+  | { type: "update_extension" }
+  | { type: "rollback_extension" }
+  | { type: "select_extension_target" };
 
 export type WorkerResponse = {
   ok: boolean;
@@ -55,6 +63,8 @@ export type WorkerResponse = {
   origin?: string;
   mode?: "binding" | "direct" | "unsupported";
   message?: string;
+  update?: ExtensionUpdateState;
+  reload_required?: boolean;
 };
 
 export type SessionEvent =
