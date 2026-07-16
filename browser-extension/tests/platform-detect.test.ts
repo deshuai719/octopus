@@ -2,11 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { detectCurrentPlatform, PLATFORM_STATUS_SIGNATURES } from "../src/platform-detect";
 
-function installPage(storage: Record<string, string> = {}, title = "Custom Gateway") {
+function installPage(storage: Record<string, string> = {}, title = "Custom Gateway", session: Record<string, string> = {}) {
   vi.stubGlobal("location", { origin: "https://relay.example" });
   vi.stubGlobal("document", { title });
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => storage[key] ?? null,
+  });
+  vi.stubGlobal("sessionStorage", {
+    getItem: (key: string) => session[key] ?? null,
   });
 }
 
@@ -204,7 +207,7 @@ describe("detectCurrentPlatform", () => {
     expect(paths).toEqual(["/api/status"]);
   });
 
-  it("requires both Sub2API storage and authenticated profile signals", async () => {
+  it("recognizes Sub2API from an access token and authenticated profile", async () => {
     installPage({ auth_token: "ephemeral-token", refresh_token: "ephemeral-refresh" });
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -217,8 +220,26 @@ describe("detectCurrentPlatform", () => {
     const result = await detectCurrentPlatform(PLATFORM_STATUS_SIGNATURES);
     expect(result.platform).toBe("sub2api");
     expect(result.evidence.map((item) => item.code)).toEqual([
+      "browser.medium.storage.sub2api_access_token",
       "browser.medium.storage.sub2api_token_pair",
       "browser.medium.auth_profile.sub2api",
     ]);
+  });
+
+  it("accepts a sessionStorage access token and the compatible profile endpoint", async () => {
+    installPage({}, "Customized gateway", { access_token: "ephemeral-access" });
+    const paths: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input)).pathname;
+      paths.push(path);
+      if (path === "/api/profile") {
+        return new Response(JSON.stringify({ data: { username: "tester" } }), { status: 200 });
+      }
+      return new Response("{}", { status: 404 });
+    }));
+
+    const result = await detectCurrentPlatform(PLATFORM_STATUS_SIGNATURES);
+    expect(result.platform).toBe("sub2api");
+    expect(paths).toEqual(["/api/status", "/api/v1/profile", "/api/profile"]);
   });
 });

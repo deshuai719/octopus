@@ -102,16 +102,31 @@ export async function detectCurrentPlatform(signatures: PlatformStatusSignature[
     }
   }
 
-  const authToken = localStorage.getItem("auth_token")?.trim();
-  const refreshToken = localStorage.getItem("refresh_token")?.trim();
-  if (authToken && refreshToken) {
-    const profile = dataRecord(await responseJSON("/api/v1/profile", {
-      headers: { Authorization: `Bearer ${authToken}` },
-    }));
+  const readStoredValue = (keys: string[]): string | undefined => {
+    for (const store of [localStorage, sessionStorage]) {
+      for (const key of keys) {
+        const value = store.getItem(key)?.trim();
+        if (value) return value.replace(/^Bearer\s+/i, "");
+      }
+    }
+    return undefined;
+  };
+  const authToken = readStoredValue(["auth_token", "access_token", "sub2api_access_token"]);
+  if (authToken) {
+    let profile: Record<string, unknown> | undefined;
+    for (const path of ["/api/v1/profile", "/api/profile"]) {
+      profile = dataRecord(await responseJSON(path, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      }));
+      if (profile) break;
+    }
     if (profile && (typeof profile.id === "number" || typeof profile.username === "string" || typeof profile.email === "string")) {
       return {
         platform: "sub2api",
         evidence: [
+          { code: "browser.medium.storage.sub2api_access_token" },
+          // Retained for compatibility with deployed Octopus validators that used
+          // this legacy evidence name even though refresh tokens are optional.
           { code: "browser.medium.storage.sub2api_token_pair" },
           { code: "browser.medium.auth_profile.sub2api" },
         ],
