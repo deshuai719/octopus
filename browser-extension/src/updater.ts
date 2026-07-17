@@ -3,6 +3,7 @@ export const UPDATE_STATE_KEY = "octopusExtensionUpdateStateV1";
 export const UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1000;
 export const UPDATE_ALARM_PERIOD_MINUTES = 24 * 60;
 export const NATIVE_HOST_NAME = "com.octopus.extension_updater";
+const MANUAL_INSTALLER_MESSAGE = "更新助手已下载。请从浏览器下载记录中手动运行 octopus-extension-helper.exe，完成后返回并点击“检测助手”。";
 
 export type UpdatePhase =
   | "idle"
@@ -55,6 +56,11 @@ export type NativeUpdateResponse = {
   targets?: UpdateTarget[];
   error?: { code: string; message: string; retryable: boolean };
 };
+
+export function manualInstallerPending(state: ExtensionUpdateState): boolean {
+  return (state.phase === "installer_ready" || state.phase === "installing")
+    && Number.isInteger(state.installer_download_id);
+}
 
 export function defaultUpdateState(): ExtensionUpdateState {
   return {
@@ -187,12 +193,21 @@ function stateFromNative(message: NativeUpdateResponse, fallbackPhase: UpdatePha
 }
 
 export async function refreshUpdaterStatus(): Promise<ExtensionUpdateState> {
+  const current = await loadUpdateState();
   try {
     const response = await sendNativeUpdateAction("status");
     return patchUpdateState({
       ...stateFromNative(response, response.stage === "target_required" ? "target_required" : "ready", response.stage === "target_required" ? "更新助手已启用，但尚未识别扩展目录。" : "自动更新支持已启用。"),
     });
   } catch {
+    if (manualInstallerPending(current)) {
+      return patchUpdateState({
+        phase: "installer_ready",
+        message: MANUAL_INSTALLER_MESSAGE,
+        error_code: undefined,
+        retryable: undefined,
+      });
+    }
     return patchUpdateState({
       phase: "host_required",
       update_available: false,
@@ -217,6 +232,14 @@ export async function checkForExtensionUpdate(force = false): Promise<ExtensionU
   } catch (error) {
     const typed = error as Error & { code?: string; retryable?: boolean };
     const hostUnavailable = !typed.code;
+    if (hostUnavailable && manualInstallerPending(current)) {
+      return patchUpdateState({
+        phase: "installer_ready",
+        message: MANUAL_INSTALLER_MESSAGE,
+        error_code: undefined,
+        retryable: undefined,
+      });
+    }
     return patchUpdateState({
       phase: hostUnavailable ? "host_required" : "error",
       message: hostUnavailable ? "首次更新需要先启用本机更新助手。" : typed.message,
@@ -333,7 +356,7 @@ export async function prepareBundledUpdaterDownload(): Promise<ExtensionUpdateSt
     objectURL = URL.createObjectURL(new Blob([binary], { type: "application/vnd.microsoft.portable-executable" }));
     const downloadID = await chrome.downloads.download({
       url: objectURL,
-      filename: "Octopus/octopus-extension-updater.exe",
+      filename: "Octopus/octopus-extension-helper.exe",
       conflictAction: "overwrite",
       saveAs: false,
     });
@@ -341,7 +364,7 @@ export async function prepareBundledUpdaterDownload(): Promise<ExtensionUpdateSt
     return patchUpdateState({
       phase: "installer_ready",
       installer_download_id: downloadID,
-      message: "更新助手已准备好。点击“运行初始化程序”，并确认 Windows 安全提示。",
+      message: MANUAL_INSTALLER_MESSAGE,
     });
   } catch (error) {
     return patchUpdateState({
@@ -355,10 +378,6 @@ export async function prepareBundledUpdaterDownload(): Promise<ExtensionUpdateSt
   }
 }
 
-export async function openBundledUpdater(downloadID: number): Promise<ExtensionUpdateState> {
-  await chrome.downloads.open(downloadID);
-  return patchUpdateState({ phase: "installing", message: "初始化程序已打开。完成 Windows 确认后，本页面会重新检测更新助手。" });
-}
 
 export async function sha256Hex(payload: ArrayBuffer): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", payload));

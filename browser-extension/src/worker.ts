@@ -31,6 +31,7 @@ import {
   checkForExtensionUpdate,
   loadUpdateState,
   refreshUpdaterStatus,
+  manualInstallerPending,
   rollbackExtensionUpdate,
   selectExtensionTarget,
   startExtensionUpdate,
@@ -64,8 +65,12 @@ function isUpdaterRequest(request: WorkerRequest): boolean {
 
 if (typeof chrome.runtime.getManifest === "function" && typeof chrome.runtime.connectNative === "function") {
   void chrome.alarms.create(UPDATE_ALARM_NAME, { periodInMinutes: UPDATE_ALARM_PERIOD_MINUTES });
-  void refreshUpdaterStatus().then((state) => {
-    if (state.phase !== "host_required" && state.phase !== "target_required") void checkForExtensionUpdate(false);
+  void loadUpdateState().then(async (stored) => {
+    if (manualInstallerPending(stored)) return;
+    const refreshed = await refreshUpdaterStatus();
+    if (refreshed.phase !== "host_required" && refreshed.phase !== "target_required") {
+      void checkForExtensionUpdate(false);
+    }
   });
 }
 

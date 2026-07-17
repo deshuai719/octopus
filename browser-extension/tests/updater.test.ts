@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkIsFresh, compareExtensionVersions, sha256Hex } from "../src/updater";
+import { checkIsFresh, compareExtensionVersions, manualInstallerPending, sha256Hex } from "../src/updater";
 
 describe("extension updater state", () => {
   it("compares Chrome manifest versions numerically", () => {
@@ -22,6 +22,20 @@ describe("extension updater state", () => {
     };
     expect(checkIsFresh(state, now)).toBe(true);
     expect(checkIsFresh({ ...state, checked_at: "2026-07-17T05:00:00Z" }, now)).toBe(false);
+  });
+
+  it("preserves a downloaded helper until the user runs it manually", () => {
+    const base = {
+      version: 1 as const,
+      current_version: "0.3.1",
+      update_available: false,
+      targets: [],
+      message: "manual",
+    };
+    expect(manualInstallerPending({ ...base, phase: "installer_ready", installer_download_id: 42 })).toBe(true);
+    expect(manualInstallerPending({ ...base, phase: "installing", installer_download_id: 42 })).toBe(true);
+    expect(manualInstallerPending({ ...base, phase: "installer_ready" })).toBe(false);
+    expect(manualInstallerPending({ ...base, phase: "host_required", installer_download_id: 42 })).toBe(false);
   });
 
   it("computes a deterministic SHA-256 for the bundled updater", async () => {

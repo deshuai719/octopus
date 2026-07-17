@@ -2,7 +2,7 @@ package extensionupdater
 
 const (
 	ProtocolVersion = 1
-	UpdaterVersion  = "0.1.0"
+	UpdaterVersion  = "0.1.1"
 
 	ExtensionID     = "hcnomejlhhefpnhljgcclhggoljokimn"
 	ExtensionOrigin = "chrome-extension://" + ExtensionID + "/"

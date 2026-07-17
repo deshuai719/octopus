@@ -25,8 +25,13 @@ await execFileAsync("go", [
 });
 
 const updater = await readFile(updaterOutput);
+for (const marker of ["requestedExecutionLevel", "asInvoker"]) {
+  if (!updater.includes(Buffer.from(marker, "utf8"))) {
+    throw new Error(`Windows updater is missing the ${marker} application-manifest marker`);
+  }
+}
 await writeFile("dist/updater-integrity.json", `${JSON.stringify({
-  version: "0.1.0",
+  version: "0.1.1",
   size: updater.byteLength,
   sha256: createHash("sha256").update(updater).digest("hex"),
 }, null, 2)}\n`);

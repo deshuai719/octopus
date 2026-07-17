@@ -27,11 +27,11 @@ pnpm --dir browser-extension build
 2. 解压到任意普通用户目录；Chrome 和 Edge 可以加载同一个目录，也可以分别加载不同目录。
 3. 在 `chrome://extensions` 或 `edge://extensions` 启用开发者模式，选择“加载已解压的扩展程序”。
 4. 后续打开侧边栏即可看到“扩展更新”。扩展最多每 24 小时后台检查一次，侧边栏检查结果缓存 6 小时；只提示，不会后台安装。
-5. 第一次点击“启用自动更新”时，扩展会校验并准备内置 `octopus-extension-updater.exe`。下载完成后再点击“运行初始化程序”，由 Windows 打开它。
-6. 初始化程序以当前用户权限安装到 `%LOCALAPPDATA%\Octopus\ExtensionUpdater`，并为 Chrome 与 Edge 注册 Native Messaging。用户不需要进入解压目录寻找 EXE。
+5. 第一次点击“下载更新助手”时，扩展会校验内置 updater，并保存为下载记录中的 `octopus-extension-helper.exe`。扩展不会代为运行；用户从浏览器下载记录中手动打开一次，完成后返回侧边栏点击“检测助手”。
+6. helper 内嵌 `asInvoker` Windows application manifest，以当前用户权限安装到 `%LOCALAPPDATA%\Octopus\ExtensionUpdater`，并为 Chrome 与 Edge 注册 Native Messaging；不请求管理员权限、不写 HKLM。
 7. 以后发现新版本时点击“立即更新”；助手会验证 Ed25519 签名和 SHA-256，备份、替换并回滚失败事务，成功后扩展自动重新加载。
 
-`chrome.downloads.open()` 必须由用户手势触发，因此首次启用固定保留“准备助手”和“运行初始化程序”两个明确阶段。未购买 Windows 代码签名证书时，SmartScreen 仍可能显示“未知发布者”；更新清单签名不能替代 Windows Authenticode 代码签名。
+首次初始化固定为“扩展只下载、用户手动运行、返回后手动检测”，不调用 `chrome.downloads.open()`，也不进行无限 Host 轮询。未购买 Windows 代码签名证书时，SmartScreen 仍可能显示“未知发布者”；这是文件信誉提示，不应出现管理员权限申请，更新清单签名也不能替代 Windows Authenticode 代码签名。
 
 如果自动识别 unpacked 目录失败，点击“选择扩展目录”，在 Windows 文件窗口中选择目标目录里的 `manifest.json`。助手只接受固定 manifest key 和扩展 ID，不提供任意目录写入。
 
@@ -48,7 +48,7 @@ Chrome 与 Edge 加载同一目录时只替换一次；加载不同目录时会�
 
 发布清单使用独立 Ed25519 私钥签名。GitHub Actions secret 名为 `OCTOPUS_EXTENSION_SIGNING_KEY_BASE64`，内容是 PKCS#8 PEM 私钥文件的 base64；仓库和 Release 只包含公钥、签名与哈希，不包含私钥。
 
-发布 tag 必须与 `browser-extension/manifest.json` 版本一致，例如 `extension-v0.3.0`。独立工作流 `.github/workflows/extension-release.yml` 会运行 Go/TypeScript 测试、构建、签名和资产上传，并设置 `make_latest=false`，不改变 Octopus 服务端 Release 的全局 latest。
+发布 tag 必须与 `browser-extension/manifest.json` 版本一致，例如 `extension-v0.3.1`。独立工作流 `.github/workflows/extension-release.yml` 会运行 Go/TypeScript 测试、构建、签名和资产上传，并设置 `make_latest=false`。
 
 ## 首次初始化
 

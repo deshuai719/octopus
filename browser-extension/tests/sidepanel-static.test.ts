@@ -6,6 +6,7 @@ const sidepanelCSS = readFileSync(new URL("../static/sidepanel.css", import.meta
 const sidepanelHTML = readFileSync(new URL("../static/sidepanel.html", import.meta.url), "utf8");
 const sidepanelScript = readFileSync(new URL("../src/sidepanel.ts", import.meta.url), "utf8");
 const panelStateScript = readFileSync(new URL("../src/panel-state.ts", import.meta.url), "utf8");
+const updaterScript = readFileSync(new URL("../src/updater.ts", import.meta.url), "utf8");
 
 describe("side panel visibility contract", () => {
   it("keeps hidden phase-specific controls out of layout", () => {
@@ -67,7 +68,12 @@ describe("side panel visibility contract", () => {
     }
     expect(sidepanelScript).toContain('type: "check_extension_update"');
     expect(sidepanelScript).toContain("prepareBundledUpdaterDownload()");
-    expect(sidepanelScript).toContain("openBundledUpdater(state.installer_download_id)");
+    expect(sidepanelScript).not.toContain("openBundledUpdater");
+    expect(sidepanelScript).not.toContain("pollUpdaterInstallation");
+    expect(sidepanelScript).toContain('type: "refresh_extension_updater_status"');
+    expect(updaterScript).toContain('filename: "Octopus/octopus-extension-helper.exe"');
+    expect(updaterScript).toContain("请从浏览器下载记录中手动运行");
+    expect(updaterScript).not.toContain("chrome.downloads.open");
     expect(sidepanelScript).toContain('areaName === "local" && UPDATE_STATE_KEY in changes');
   });
 

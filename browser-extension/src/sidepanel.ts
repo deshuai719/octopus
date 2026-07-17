@@ -8,8 +8,8 @@ import {
   UPDATE_STATE_KEY,
   type ExtensionUpdateState,
   loadUpdateState,
-  openBundledUpdater,
   patchUpdateState,
+  manualInstallerPending,
   prepareBundledUpdaterDownload,
 } from "./updater";
 import type { DirectCaptureSummaryItem, DirectCaptureView, SessionEvent, WorkerRequest, WorkerResponse } from "./types";
@@ -81,7 +81,6 @@ let summaryTimer: ReturnType<typeof setTimeout> | undefined;
 let summaryGeneration = 0;
 let summaryActiveSince = 0;
 let storageRefreshTimer: ReturnType<typeof setTimeout> | undefined;
-let updaterPollTimer: ReturnType<typeof setTimeout> | undefined;
 
 function send(request: WorkerRequest) {
   return chrome.runtime.sendMessage<WorkerRequest, WorkerResponse>(request);
@@ -96,8 +95,8 @@ function updatePhaseLabel(phase: ExtensionUpdateState["phase"]): string {
     ready: "已是最新",
     update_available: "发现新版",
     installer_downloading: "准备中",
-    installer_ready: "待运行",
-    installing: "安装中",
+    installer_ready: "待手动运行",
+    installing: "待检测",
     updating: "更新中",
     updated: "已更新",
     rolling_back: "回滚中",
@@ -130,18 +129,18 @@ function renderUpdateState(state: ExtensionUpdateState): void {
   rollbackExtensionUpdateButton.hidden = !["updated", "rolled_back", "error"].includes(state.phase) || state.targets.length === 0;
   runExtensionUpdateButton.hidden = false;
   runExtensionUpdateButton.disabled = false;
-  if (state.phase === "host_required") runExtensionUpdateButton.textContent = "启用自动更新";
+  if (state.phase === "host_required") runExtensionUpdateButton.textContent = "下载更新助手";
   else if (state.phase === "installer_downloading") {
     runExtensionUpdateButton.textContent = "正在准备";
     runExtensionUpdateButton.disabled = true;
-  } else if (state.phase === "installer_ready") runExtensionUpdateButton.textContent = "运行初始化程序";
-  else if (state.phase === "installing") runExtensionUpdateButton.textContent = "重新检测助手";
+  } else if (state.phase === "installer_ready") runExtensionUpdateButton.textContent = "检测助手";
+  else if (state.phase === "installing") runExtensionUpdateButton.textContent = "检测助手";
   else if (state.phase === "target_required") runExtensionUpdateButton.textContent = "选择扩展目录";
   else if (state.phase === "update_available") runExtensionUpdateButton.textContent = `更新到 ${state.latest_version}`;
   else if (state.phase === "updating") {
     runExtensionUpdateButton.textContent = "正在更新";
     runExtensionUpdateButton.disabled = true;
-  } else if (state.phase === "error" && state.error_code === "updater.host.unavailable") runExtensionUpdateButton.textContent = "重新准备助手";
+  } else if (state.phase === "error" && state.error_code === "updater.host.unavailable") runExtensionUpdateButton.textContent = "重新下载助手";
   else {
     runExtensionUpdateButton.textContent = "立即更新";
     runExtensionUpdateButton.disabled = !state.update_available;
@@ -153,16 +152,6 @@ async function refreshUpdateState(check = false): Promise<void> {
   if (response.update) renderUpdateState(response.update);
 }
 
-function pollUpdaterInstallation(): void {
-  if (updaterPollTimer) clearTimeout(updaterPollTimer);
-  updaterPollTimer = setTimeout(async () => {
-    const response = await send({ type: "refresh_extension_updater_status" });
-    if (!response.update) return;
-    renderUpdateState(response.update);
-    if (response.update.phase === "host_required") pollUpdaterInstallation();
-    else if (response.update.phase === "ready") void refreshUpdateState(true);
-  }, 2_000);
-}
 
 function renderView(view: PanelView): void {
   status.textContent = view.status;
@@ -613,26 +602,18 @@ runExtensionUpdateButton.addEventListener("click", async () => {
     renderUpdateState(await prepareBundledUpdaterDownload());
     return;
   }
-  if (state.phase === "installer_ready" && state.installer_download_id !== undefined) {
-    try {
-      renderUpdateState(await openBundledUpdater(state.installer_download_id));
-      pollUpdaterInstallation();
-    } catch (error) {
-      renderUpdateState(await patchUpdateState({
-        phase: "error",
-        message: error instanceof Error ? error.message : "无法打开初始化程序",
-        error_code: "updater.installer.open_failed",
-        retryable: true,
-      }));
-    }
-    return;
-  }
-  if (state.phase === "installing") {
+  if (state.phase === "installer_ready" || state.phase === "installing") {
     const response = await send({ type: "refresh_extension_updater_status" });
-    if (response.update) {
+    if (!response.update) return;
+    if (response.update.phase === "host_required") {
+      renderUpdateState(await patchUpdateState({
+        phase: "installer_ready",
+        installer_download_id: state.installer_download_id,
+        message: "仍未检测到更新助手。请先从浏览器下载记录中手动运行 octopus-extension-helper.exe，再点击“检测助手”。",
+      }));
+    } else {
       renderUpdateState(response.update);
-      if (response.update.phase === "host_required") pollUpdaterInstallation();
-      else void refreshUpdateState(true);
+      if (response.update.phase === "ready") void refreshUpdateState(true);
     }
     return;
   }
@@ -676,5 +657,9 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 renderView(readingView());
 void refreshActiveContext();
 void refreshSummary(true);
-void loadUpdateState().then(renderUpdateState);
-void refreshUpdateState(true);
+void loadUpdateState().then((state) => {
+  renderUpdateState(state);
+  if (!manualInstallerPending(state) && state.phase !== "host_required") {
+    void refreshUpdateState(true);
+  }
+});
