@@ -45,6 +45,15 @@ export async function detectCurrentPlatform(signatures: PlatformStatusSignature[
     if (!isRecord(payload)) return undefined;
     return isRecord(payload.data) ? payload.data : payload;
   };
+  const hasSub2APIProfileIdentity = (profile: Record<string, unknown>): boolean => {
+    const user = isRecord(profile.user) ? profile.user : undefined;
+    return [profile, user].some((record) =>
+      !!record &&
+      (typeof record.id === "number" ||
+        typeof record.username === "string" ||
+        typeof record.email === "string"),
+    );
+  };
   const isDoneHubPartialStatus = (status: Record<string, unknown>): boolean =>
     Object.hasOwn(status, "linuxDo_oauth") && Object.hasOwn(status, "max_log_query_days");
   const isDoneHubGroupMap = (payload: unknown): boolean => {
@@ -114,13 +123,13 @@ export async function detectCurrentPlatform(signatures: PlatformStatusSignature[
   const authToken = readStoredValue(["auth_token", "access_token", "sub2api_access_token"]);
   if (authToken) {
     let profile: Record<string, unknown> | undefined;
-    for (const path of ["/api/v1/profile", "/api/profile"]) {
+    for (const path of ["/api/v1/profile", "/api/profile", "/api/v1/auth/me"]) {
       profile = dataRecord(await responseJSON(path, {
         headers: { Authorization: `Bearer ${authToken}` },
       }));
       if (profile) break;
     }
-    if (profile && (typeof profile.id === "number" || typeof profile.username === "string" || typeof profile.email === "string")) {
+    if (profile && hasSub2APIProfileIdentity(profile)) {
       return {
         platform: "sub2api",
         evidence: [

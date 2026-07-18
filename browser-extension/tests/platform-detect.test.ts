@@ -242,4 +242,21 @@ describe("detectCurrentPlatform", () => {
     expect(result.platform).toBe("sub2api");
     expect(paths).toEqual(["/api/status", "/api/v1/profile", "/api/profile"]);
   });
+
+  it("recognizes Sub2API variants that expose the current user at auth/me", async () => {
+    installPage({ auth_token: "ephemeral-token" }, "OpenToken - AI API Gateway");
+    const paths: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input)).pathname;
+      paths.push(path);
+      if (path === "/api/v1/auth/me") {
+        return new Response(JSON.stringify({ data: { user: { id: 42, email: "masked@example.invalid" } } }), { status: 200 });
+      }
+      return new Response("{}", { status: 404 });
+    }));
+
+    const result = await detectCurrentPlatform(PLATFORM_STATUS_SIGNATURES);
+    expect(result.platform).toBe("sub2api");
+    expect(paths).toEqual(["/api/status", "/api/v1/profile", "/api/profile", "/api/v1/auth/me"]);
+  });
 });
