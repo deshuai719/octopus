@@ -93,6 +93,7 @@ export type DirectCaptureCandidate = {
   token_expires_at?: number;
   platform_user_id?: number;
   identity_label?: string;
+  user_agent?: string;
   evidence: PlatformEvidence[];
 };
 

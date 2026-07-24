@@ -39,6 +39,7 @@ type DirectCaptureCandidate struct {
 	TokenExpiresAt int64                   `json:"token_expires_at,omitempty"`
 	PlatformUserID *int                    `json:"platform_user_id,omitempty"`
 	IdentityLabel  string                  `json:"identity_label,omitempty"`
+	UserAgent      string                  `json:"user_agent,omitempty"`
 	Evidence       []DirectCaptureEvidence `json:"evidence"`
 }
 
@@ -50,6 +51,7 @@ type ValidatedDirectCaptureCandidate struct {
 	TokenExpiresAt  int64
 	PlatformUserID  *int
 	IdentityLabel   string
+	UserAgent       string
 	AccessTokenMask string
 	EvidenceCodes   []string
 }
@@ -74,8 +76,12 @@ func ValidateDirectCaptureCandidate(ctx context.Context, input DirectCaptureCand
 	accessToken := strings.TrimSpace(input.AccessToken)
 	refreshToken := strings.TrimSpace(input.RefreshToken)
 	identityLabel := strings.TrimSpace(input.IdentityLabel)
+	userAgent := strings.TrimSpace(input.UserAgent)
 	if accessToken == "" || len(accessToken) > DirectCaptureMaxCredentialLength || len(refreshToken) > DirectCaptureMaxCredentialLength || len(identityLabel) > 256 {
 		return nil, directCaptureValidationError("direct_capture.candidate.invalid", "candidate credential fields are missing or too large", false, "restart_capture")
+	}
+	if len(userAgent) > 512 {
+		return nil, directCaptureValidationError("direct_capture.candidate.invalid", "user agent is too large", false, "restart_capture")
 	}
 	if len(input.Evidence) == 0 || len(input.Evidence) > DirectCaptureMaxEvidenceItems {
 		return nil, directCaptureValidationError("platform.variant.inconclusive", "platform evidence is incomplete", false, "manual_add")
@@ -108,6 +114,7 @@ func ValidateDirectCaptureCandidate(ctx context.Context, input DirectCaptureCand
 			TokenExpiresAt:  input.TokenExpiresAt,
 			PlatformUserID:  cloneDirectCaptureInt(input.PlatformUserID),
 			IdentityLabel:   identityLabel,
+			UserAgent:       userAgent,
 			AccessTokenMask: maskDirectCaptureSecret(accessToken),
 			EvidenceCodes:   evidenceCodes,
 		}, nil

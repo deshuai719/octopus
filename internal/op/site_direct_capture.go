@@ -64,6 +64,7 @@ type DirectCapturePersistInput struct {
 	RefreshToken    string
 	TokenExpiresAt  int64
 	PlatformUserID  *int
+	UserAgent       string
 	AddTags         []string
 }
 
@@ -192,6 +193,10 @@ func ConfirmDirectCapture(ctx context.Context, input DirectCapturePersistInput) 
 				GlobalWeight:     1,
 				DefaultRouteType: model.SiteModelRouteTypeOpenAIChat,
 				Tags:             append([]string(nil), input.AddTags...),
+				CustomHeader:     upsertSiteUserAgentHeader(nil, input.UserAgent),
+			}
+			if input.Platform == model.SitePlatformSub2API {
+				site.ProxyMode = model.ProxyUsageModeSystem
 			}
 			if err := site.Validate(); err != nil {
 				return err
@@ -225,6 +230,18 @@ func ConfirmDirectCapture(ctx context.Context, input DirectCapturePersistInput) 
 					return err
 				}
 				if err := tx.Model(&model.Site{}).Where("id = ?", site.ID).Select("tags").Updates(&model.Site{Tags: merged}).Error; err != nil {
+					return err
+				}
+			}
+			if strings.TrimSpace(input.UserAgent) != "" {
+				uaHeaders := upsertSiteUserAgentHeader(site.CustomHeader, input.UserAgent)
+				if err := tx.Model(&model.Site{}).Where("id = ?", site.ID).Select("custom_header").Updates(&model.Site{CustomHeader: uaHeaders}).Error; err != nil {
+					return err
+				}
+				site.CustomHeader = uaHeaders
+			}
+			if input.Platform == model.SitePlatformSub2API && site.ProxyMode == model.ProxyUsageModeDirect {
+				if err := tx.Model(&model.Site{}).Where("id = ?", site.ID).Update("proxy_mode", model.ProxyUsageModeSystem).Error; err != nil {
 					return err
 				}
 			}
@@ -354,4 +371,32 @@ func normalizeDirectCapturePersistError(err error) error {
 
 func directCaptureOpError(code, message string, status int, stage string, retryable bool, action string) *apperror.Error {
 	return apperror.New(code, message).WithStatus(status).WithStage(stage).WithRetryable(retryable).WithSuggestedAction(action)
+}
+
+func upsertSiteUserAgentHeader(headers []model.CustomHeader, userAgent string) []model.CustomHeader {
+	userAgent = strings.TrimSpace(userAgent)
+	if userAgent == "" {
+		return headers
+	}
+	out := make([]model.CustomHeader, 0, len(headers)+1)
+	found := false
+	for _, item := range headers {
+		key := strings.TrimSpace(item.HeaderKey)
+		if strings.EqualFold(key, "User-Agent") {
+			if found {
+				continue
+			}
+			out = append(out, model.CustomHeader{HeaderKey: "User-Agent", HeaderValue: userAgent})
+			found = true
+			continue
+		}
+		if key == "" {
+			continue
+		}
+		out = append(out, model.CustomHeader{HeaderKey: key, HeaderValue: item.HeaderValue})
+	}
+	if !found {
+		out = append(out, model.CustomHeader{HeaderKey: "User-Agent", HeaderValue: userAgent})
+	}
+	return out
 }

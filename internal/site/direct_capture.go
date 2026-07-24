@@ -253,7 +253,8 @@ func ConfirmDirectCapture(ctx context.Context, captureID string, request DirectC
 		Match: match, CanonicalOrigin: validated.Origin, Platform: validated.Platform,
 		SiteName: firstDirectCaptureName(request.SiteName, match.SiteName), AccountName: accountName,
 		AccessToken: validated.AccessToken, RefreshToken: validated.RefreshToken, TokenExpiresAt: validated.TokenExpiresAt, PlatformUserID: validated.PlatformUserID,
-		AddTags: request.AddTags,
+		UserAgent: validated.UserAgent,
+		AddTags:   request.AddTags,
 	})
 	if err != nil {
 		directCaptures.mu.Lock()

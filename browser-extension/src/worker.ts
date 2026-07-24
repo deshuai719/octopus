@@ -217,9 +217,34 @@ async function confirmDirectCapture(
   }
 }
 
-async function submitDirectPreview(binding: OctopusBinding, operationID: string, origin: string, platform: Platform, evidence: DirectCaptureCandidate["evidence"], extracted: ExtractResult, pageTitle?: string): Promise<WorkerResponse> {
+
+async function readPageUserAgent(tabId: number): Promise<string> {
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => navigator.userAgent,
+    });
+    if (typeof result === "string" && result.trim()) return result.trim();
+  } catch {
+    // fall through
+  }
+  try {
+    if (typeof navigator !== "undefined" && navigator.userAgent) return navigator.userAgent;
+  } catch {
+    // ignore
+  }
+  return "";
+}
+
+async function submitDirectPreview(binding: OctopusBinding, operationID: string, origin: string, platform: Platform, evidence: DirectCaptureCandidate["evidence"], extracted: ExtractResult, pageTitle?: string, userAgent?: string): Promise<WorkerResponse> {
   if (extracted.kind !== "candidate") return { ok: extracted.kind !== "error", result: extracted };
-  const candidate: DirectCaptureCandidate = { origin, platform, evidence, ...extracted.candidate };
+  const candidate: DirectCaptureCandidate = {
+    origin,
+    platform,
+    evidence,
+    ...extracted.candidate,
+    user_agent: (userAgent ?? "").trim() || undefined,
+  };
   const capture = { ...await octopusAPI<DirectCaptureView>(binding, "/api/v1/site/direct-capture/preview", operationID, { method: "POST", body: JSON.stringify(candidate) }), page_title: normalizedPageTitle(pageTitle) };
   await putDirectSession({ origin, operation_id: operationID, platform, page_title: capture.page_title, capture_id: capture.capture_id, phase: capture.phase, expires_at: capture.expires_at, generation_attempted: extracted.generated_system_token === true, capture });
   await revokeDirectPermission(origin);
@@ -273,7 +298,8 @@ async function startDirectCapture(tabId: number, origin: string, pageTitle?: str
     await revokeDirectPermission(origin);
     return { ok: false, mode: "direct", origin, result: extracted, message: extracted.message };
   }
-  return submitDirectPreview(binding, operationID, origin, discovery.platform, discovery.evidence, extracted, pageTitle);
+  const userAgent = await readPageUserAgent(tabId);
+  return submitDirectPreview(binding, operationID, origin, discovery.platform, discovery.evidence, extracted, pageTitle, userAgent);
 }
 
 async function routeClickedTab(tab: chrome.tabs.Tab, permissionPromise: Promise<boolean>): Promise<WorkerResponse> {
@@ -478,7 +504,8 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, _sender, sendRespo
         const extracted = await extractDirectCandidate(tab.id, request.origin, indexed.platform, evidence, true);
         const binding = await getOctopusBinding();
         if (!binding) throw new Error("Octopus 绑定不存在");
-        const response = await submitDirectPreview(binding, indexed.operation_id, request.origin, indexed.platform, evidence, extracted, indexed.page_title);
+        const userAgent = await readPageUserAgent(tab.id);
+        const response = await submitDirectPreview(binding, indexed.operation_id, request.origin, indexed.platform, evidence, extracted, indexed.page_title, userAgent);
         sendResponse(response);
         return;
       }
@@ -489,6 +516,9 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, _sender, sendRespo
         if (token.length === 0 || token.length > 16 * 1024) throw new Error("推荐令牌为空或超过 16 KiB 限制");
         const binding = await getOctopusBinding();
         if (!binding) throw new Error("Octopus 绑定不存在");
+        const tabs = await chrome.tabs.query({ url: permissionPattern(request.origin) });
+        const tab = tabs.find((item) => item.active) ?? tabs.at(-1);
+        const userAgent = tab?.id ? await readPageUserAgent(tab.id) : (typeof navigator !== "undefined" ? navigator.userAgent : "");
         const response = await submitDirectPreview(binding, indexed.operation_id, request.origin, indexed.platform, indexed.evidence, {
           kind: "candidate",
           candidate: {
@@ -496,7 +526,7 @@ chrome.runtime.onMessage.addListener((request: WorkerRequest, _sender, sendRespo
             platform_user_id: indexed.platform_user_id,
             identity_label: indexed.identity_label,
           },
-        }, indexed.page_title);
+        }, indexed.page_title, userAgent);
         sendResponse(response);
         return;
       }
