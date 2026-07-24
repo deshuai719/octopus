@@ -318,3 +318,63 @@ func TestIsDirectCaptureIdentityProbePathAllowsAuthMe(t *testing.T) {
 		t.Fatal("/api/status must not be treated as identity probe")
 	}
 }
+
+func TestProbeDirectCaptureProfileAuthInvalidNotOverwrittenByProfile404(t *testing.T) {
+	var authMe, profile atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/auth/me":
+			authMe.Add(1)
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"code":"INVALID_TOKEN","message":"Invalid token"}`))
+		case "/api/v1/profile", "/api/profile":
+			profile.Add(1)
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	_, err := probeDirectCaptureProfileWithClient(
+		context.Background(),
+		server.URL,
+		model.SitePlatformSub2API,
+		"candidate-token",
+		nil,
+		[]string{"/api/v1/auth/me", "/api/v1/profile", "/api/profile"},
+		server.Client(),
+	)
+	if !apperror.IsCode(err, "direct_capture.auth.invalid") {
+		t.Fatalf("error code = %q, want direct_capture.auth.invalid", apperror.Code(err))
+	}
+	if got := authMe.Load(); got != 1 {
+		t.Fatalf("auth/me requests = %d, want 1", got)
+	}
+	if got := profile.Load(); got != 0 {
+		t.Fatalf("profile requests = %d, want 0 (must stop after auth failure)", got)
+	}
+}
+
+func TestProbeDirectCaptureProfileRateLimitedStopsImmediately(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"IP banned due to too many failed attempts. Try again in 30m0s"}`))
+	}))
+	defer server.Close()
+
+	_, err := probeDirectCaptureProfileWithClient(
+		context.Background(),
+		server.URL,
+		model.SitePlatformSub2API,
+		"candidate-token",
+		nil,
+		[]string{"/api/v1/auth/me", "/api/v1/profile"},
+		server.Client(),
+	)
+	if !apperror.IsCode(err, "direct_capture.upstream.rate_limited") {
+		t.Fatalf("error code = %q, want direct_capture.upstream.rate_limited", apperror.Code(err))
+	}
+}

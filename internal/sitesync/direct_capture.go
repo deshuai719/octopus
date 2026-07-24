@@ -227,7 +227,20 @@ func probeDirectCaptureProfileWithClient(ctx context.Context, origin string, pla
 			continue
 		}
 		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
-			lastErr = directCaptureValidationError("direct_capture.auth.invalid", "candidate authentication failed", false, "login_again")
+			// Auth failures are definitive for this candidate. Do not fall through to legacy
+			// profile paths that may 404 and rewrite the error as upstream.failed.
+			if isDirectCaptureUpstreamRateLimitBody(body) {
+				return directCaptureProfile{}, directCaptureValidationError(
+					"direct_capture.upstream.rate_limited",
+					"upstream temporarily blocked this server IP; retry later",
+					true,
+					"retry",
+				)
+			}
+			return directCaptureProfile{}, directCaptureValidationError("direct_capture.auth.invalid", "candidate authentication failed", false, "login_again")
+		}
+		if response.StatusCode == http.StatusNotFound {
+			lastErr = directCaptureValidationError("direct_capture.upstream.failed", "upstream validation failed", false, "retry")
 			continue
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -425,6 +438,14 @@ func isDoneHubGroupMapPayload(payload map[string]any) bool {
 		}
 	}
 	return true
+}
+
+func isDirectCaptureUpstreamRateLimitBody(body []byte) bool {
+	lower := strings.ToLower(string(body))
+	return strings.Contains(lower, "ip banned") ||
+		strings.Contains(lower, "too many failed") ||
+		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "too many requests")
 }
 
 func isDirectCaptureIdentityProbePath(path string) bool {
