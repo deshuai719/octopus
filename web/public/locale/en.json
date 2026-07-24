@@ -172,6 +172,11 @@
             "zh_hant": "Chinese (Traditional)",
             "en": "English"
         },
+        "directCaptureProxyUrl": {
+            "label": "Direct capture validation proxy",
+            "description": "Outbound proxy used only when validating direct-capture credentials against upstream sites. Same-host Resin example: http://Default:<token>@resin:2260. Leave empty for direct egress.",
+            "placeholder": "http://Default:token@resin:2260"
+        },
         "proxyUrl": {
             "label": "Proxy URL",
             "placeholder": "Enter proxy URL"

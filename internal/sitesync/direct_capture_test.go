@@ -378,3 +378,53 @@ func TestProbeDirectCaptureProfileRateLimitedStopsImmediately(t *testing.T) {
 		t.Fatalf("error code = %q, want direct_capture.upstream.rate_limited", apperror.Code(err))
 	}
 }
+
+func TestNewDirectCaptureHTTPClientUsesHTTPProxy(t *testing.T) {
+	var sawProxy atomic.Bool
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawProxy.Store(true)
+		if r.Method != http.MethodConnect && r.URL.Host == "" {
+			// http proxy absolute-form
+		}
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer proxy.Close()
+
+	client := newDirectCaptureHTTPClient(proxy.URL)
+	if client == nil || client.Transport == nil {
+		t.Fatal("expected client")
+	}
+	// Build a request that will attempt the configured proxy. We only assert the transport is wired;
+	// actual CONNECT behavior depends on the proxy implementation.
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.Proxy == nil {
+		t.Fatal("expected proxied transport")
+	}
+	req, err := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyURL, err := transport.Proxy(req)
+	if err != nil || proxyURL == nil || proxyURL.String() != proxy.URL {
+		t.Fatalf("proxy URL = %v err=%v, want %s", proxyURL, err, proxy.URL)
+	}
+	_ = sawProxy
+}
+
+func TestNewDirectCaptureHTTPClientEmptyUsesPublicClient(t *testing.T) {
+	client := newDirectCaptureHTTPClient("")
+	if client == nil {
+		t.Fatal("expected client")
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("expected *http.Transport")
+	}
+	if transport.Proxy != nil {
+		// Public client forces Proxy=nil function or nil
+		req, _ := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+		if u, err := transport.Proxy(req); err == nil && u != nil {
+			t.Fatalf("expected no proxy, got %v", u)
+		}
+	}
+}

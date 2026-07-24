@@ -2,18 +2,21 @@ package sitesync
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/apperror"
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/op"
 	"github.com/bestruirui/octopus/internal/siteorigin"
 )
 
@@ -340,7 +343,7 @@ func fetchDirectCapturePublicJSON(ctx context.Context, origin string, path strin
 }
 
 func directCaptureHTTPClient(origin string) *http.Client {
-	client := siteorigin.NewPublicHTTPClient(10 * time.Second)
+	client := newDirectCaptureHTTPClient(resolveDirectCaptureProxyURL())
 	checkPublicRedirect := client.CheckRedirect
 	client.CheckRedirect = func(request *http.Request, via []*http.Request) error {
 		redirectOrigin, err := siteorigin.Normalize(request.URL.String())
@@ -350,9 +353,59 @@ func directCaptureHTTPClient(origin string) *http.Client {
 		if redirectOrigin != origin {
 			return fmt.Errorf("direct capture validation redirect changed origin")
 		}
-		return checkPublicRedirect(request, via)
+		if checkPublicRedirect != nil {
+			return checkPublicRedirect(request, via)
+		}
+		return nil
 	}
 	return client
+}
+
+// resolveDirectCaptureProxyURL returns the dedicated direct-capture proxy when set.
+// Empty means direct egress (legacy behavior). Typical value is a same-host Resin gateway,
+// e.g. http://Default:<token>@resin:2260.
+func resolveDirectCaptureProxyURL() string {
+	value, err := op.SettingGetString(model.SettingKeyDirectCaptureProxyURL)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func newDirectCaptureHTTPClient(proxyURLStr string) *http.Client {
+	proxyURLStr = strings.TrimSpace(proxyURLStr)
+	if proxyURLStr == "" {
+		return siteorigin.NewPublicHTTPClient(10 * time.Second)
+	}
+	// Proxied validation still requires a public target origin (checked before probe),
+	// but the proxy host itself may be a private Docker service such as Resin.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	proxyURL, err := url.Parse(proxyURLStr)
+	if err != nil || proxyURL.Scheme == "" || proxyURL.Host == "" {
+		return siteorigin.NewPublicHTTPClient(10 * time.Second)
+	}
+	switch strings.ToLower(proxyURL.Scheme) {
+	case "http", "https":
+		transport.Proxy = http.ProxyURL(proxyURL)
+	default:
+		// Unsupported schemes fall back to the hardened public client.
+		return siteorigin.NewPublicHTTPClient(10 * time.Second)
+	}
+	return &http.Client{
+		Transport: transport,
+		Timeout:   15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			origin, err := siteorigin.Normalize(req.URL.String())
+			if err != nil {
+				return err
+			}
+			return siteorigin.ValidatePublicHost(req.Context(), origin, nilResolverFallback{})
+		},
+	}
 }
 
 func classifyDirectCaptureStatus(payload map[string]any) model.SitePlatform {

@@ -83,6 +83,7 @@ export function SettingNetwork() {
     const t = useTranslations('setting');
 
     const proxyUrl = useSettingField(SettingKey.ProxyURL);
+    const directCaptureProxyUrl = useSettingField(SettingKey.DirectCaptureProxyURL);
     const apiBaseUrl = useSettingField(SettingKey.ApiBaseUrl);
     const cors = useSettingField(SettingKey.CORSAllowOrigins);
     const sseHeartbeat = useSettingField(SettingKey.SSEHeartbeatInterval, SSE_MIRROR_KEYS);
@@ -142,6 +143,17 @@ export function SettingNetwork() {
                     onChange={(e) => proxyUrl.setValue(e.target.value)}
                     onBlur={proxyUrl.save}
                     placeholder={t('proxyUrl.placeholder')}
+                    className="w-48 rounded-xl"
+                />
+            </SettingRow>
+
+            {/* 直接捕获上游校验代理（可接同机 Resin 网关） */}
+            <SettingRow icon={Globe} label={t('directCaptureProxyUrl.label')} tooltip={t('directCaptureProxyUrl.description')}>
+                <Input
+                    value={directCaptureProxyUrl.value}
+                    onChange={(e) => directCaptureProxyUrl.setValue(e.target.value)}
+                    onBlur={directCaptureProxyUrl.save}
+                    placeholder={t('directCaptureProxyUrl.placeholder')}
                     className="w-48 rounded-xl"
                 />
             </SettingRow>

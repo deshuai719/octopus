@@ -172,6 +172,11 @@
             "zh_hant": "繁体中文",
             "en": "English"
         },
+        "directCaptureProxyUrl": {
+            "label": "直接捕获校验代理",
+            "description": "仅用于扩展直接捕获时的上游身份校验出站。可填同机 Resin：http://Default:<token>@resin:2260。留空则直连本机出口。",
+            "placeholder": "http://Default:token@resin:2260"
+        },
         "proxyUrl": {
             "label": "代理地址",
             "placeholder": "请输入代理地址"
