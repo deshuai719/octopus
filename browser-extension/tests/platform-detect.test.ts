@@ -211,7 +211,7 @@ describe("detectCurrentPlatform", () => {
     installPage({ auth_token: "ephemeral-token", refresh_token: "ephemeral-refresh" });
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith("/api/v1/profile")) {
+      if (url.endsWith("/api/v1/auth/me") || url.endsWith("/api/v1/profile")) {
         return new Response(JSON.stringify({ data: { id: 7, email: "masked@example.invalid" } }), { status: 200 });
       }
       return new Response(JSON.stringify({ success: true, data: { version: "test" } }), { status: 200 });
@@ -240,7 +240,7 @@ describe("detectCurrentPlatform", () => {
 
     const result = await detectCurrentPlatform(PLATFORM_STATUS_SIGNATURES);
     expect(result.platform).toBe("sub2api");
-    expect(paths).toEqual(["/api/status", "/api/v1/profile", "/api/profile"]);
+    expect(paths).toEqual(["/api/status", "/api/v1/auth/me", "/api/v1/profile", "/api/profile"]);
   });
 
   it("recognizes Sub2API variants that expose the current user at auth/me", async () => {
@@ -257,6 +257,6 @@ describe("detectCurrentPlatform", () => {
 
     const result = await detectCurrentPlatform(PLATFORM_STATUS_SIGNATURES);
     expect(result.platform).toBe("sub2api");
-    expect(paths).toEqual(["/api/status", "/api/v1/profile", "/api/profile", "/api/v1/auth/me"]);
+    expect(paths).toEqual(["/api/status", "/api/v1/auth/me"]);
   });
 });

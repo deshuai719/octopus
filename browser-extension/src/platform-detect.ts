@@ -120,11 +120,39 @@ export async function detectCurrentPlatform(signatures: PlatformStatusSignature[
     }
     return undefined;
   };
-  const authToken = readStoredValue(["auth_token", "access_token", "sub2api_access_token"]);
-  if (authToken) {
+  const readStoredValues = (keys: string[]): string[] => {
+    const values: string[] = [];
+    const seen = new Set<string>();
+    for (const store of [localStorage, sessionStorage]) {
+      for (const key of keys) {
+        const raw = store.getItem(key)?.trim();
+        if (!raw) continue;
+        const value = raw.replace(/^Bearer\s+/i, "").trim();
+        if (!value || seen.has(value) || value.startsWith("{") || value.startsWith("[")) continue;
+        seen.add(value);
+        values.push(value);
+      }
+    }
+    return values;
+  };
+  const responseJSONOmit = async (path: string, init: RequestInit = {}): Promise<unknown> => {
+    try {
+      const response = await fetch(new URL(path, location.origin), {
+        credentials: "omit",
+        headers: { Accept: "application/json", ...(init.headers ?? {}) },
+        ...init,
+      });
+      return response.ok ? await response.json() : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  // Sub2API evidence requires a bearer token that works without browser cookies,
+  // because Octopus server-side validation only has the token.
+  for (const authToken of readStoredValues(["access_token", "auth_token", "sub2api_access_token", "token"])) {
     let profile: Record<string, unknown> | undefined;
-    for (const path of ["/api/v1/profile", "/api/profile", "/api/v1/auth/me"]) {
-      profile = dataRecord(await responseJSON(path, {
+    for (const path of ["/api/v1/auth/me", "/api/v1/profile", "/api/profile"]) {
+      profile = dataRecord(await responseJSONOmit(path, {
         headers: { Authorization: `Bearer ${authToken}` },
       }));
       if (profile) break;
