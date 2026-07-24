@@ -58,7 +58,7 @@ var platformAuthCapabilities = map[model.SitePlatform]PlatformAuthCapability{
 		SupportsRefresh: true,
 		ValidationProbe: ValidationProbe{
 			Method:            "GET",
-			Paths:             []string{"/api/v1/profile", "/api/profile"},
+			Paths:             []string{"/api/v1/auth/me", "/api/v1/profile", "/api/profile"},
 			CompatibleFamily:  "sub2api",
 			RuntimeValidation: true,
 		},

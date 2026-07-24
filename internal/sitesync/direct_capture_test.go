@@ -252,3 +252,69 @@ func TestValidateDirectCaptureEvidenceRequiresStrongOrTwoMediumSignals(t *testin
 		})
 	}
 }
+
+func TestProbeDirectCaptureProfileUsesSub2APIAuthMe(t *testing.T) {
+	var authMeRequests atomic.Int32
+	var profileRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/auth/me":
+			authMeRequests.Add(1)
+			if got := r.Header.Get("Authorization"); got != "Bearer candidate-token" {
+				t.Fatalf("Authorization = %q", got)
+			}
+			_, _ = w.Write([]byte(`{"code":0,"data":{"id":42,"username":"sub2-user","email":"u@example.com"}}`))
+		case "/api/v1/profile", "/api/profile":
+			profileRequests.Add(1)
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	capability, ok := PlatformAuthCapabilityFor(model.SitePlatformSub2API)
+	if !ok {
+		t.Fatal("missing Sub2API capability")
+	}
+	profile, err := probeDirectCaptureProfileWithClient(
+		context.Background(),
+		server.URL,
+		model.SitePlatformSub2API,
+		"candidate-token",
+		nil,
+		capability.ValidationProbe.Paths,
+		server.Client(),
+	)
+	if err != nil {
+		t.Fatalf("probeDirectCaptureProfileWithClient() error = %v", err)
+	}
+	if profile.Path != "/api/v1/auth/me" {
+		t.Fatalf("profile path = %q, want /api/v1/auth/me", profile.Path)
+	}
+	if !hasDirectCaptureIdentity(profile.Payload) {
+		t.Fatalf("expected identity in payload: %#v", profile.Payload)
+	}
+	if err := verifyDirectCaptureServerEvidence(context.Background(), server.URL, model.SitePlatformSub2API, profile); err != nil {
+		t.Fatalf("verifyDirectCaptureServerEvidence() error = %v", err)
+	}
+	if got := authMeRequests.Load(); got != 1 {
+		t.Fatalf("auth/me requests = %d, want 1", got)
+	}
+	if got := profileRequests.Load(); got != 0 {
+		t.Fatalf("profile requests = %d, want 0 (auth/me should win first)", got)
+	}
+}
+
+func TestIsDirectCaptureIdentityProbePathAllowsAuthMe(t *testing.T) {
+	if !isDirectCaptureIdentityProbePath("/api/v1/auth/me") {
+		t.Fatal("auth/me should be an identity probe path")
+	}
+	if !isSub2APIDirectCaptureProfilePath("/api/v1/auth/me") {
+		t.Fatal("auth/me should satisfy Sub2API profile path check")
+	}
+	if isDirectCaptureIdentityProbePath("/api/status") {
+		t.Fatal("/api/status must not be treated as identity probe")
+	}
+}

@@ -192,7 +192,7 @@ func probeDirectCaptureProfile(ctx context.Context, origin string, platform mode
 func probeDirectCaptureProfileWithClient(ctx context.Context, origin string, platform model.SitePlatform, accessToken string, userID *int, paths []string, client *http.Client) (directCaptureProfile, error) {
 	var lastErr error
 	for _, path := range paths {
-		if !strings.Contains(path, "user") && !strings.Contains(path, "profile") {
+		if !isDirectCaptureIdentityProbePath(path) {
 			continue
 		}
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, buildSiteURL(origin, path), nil)
@@ -261,7 +261,7 @@ func verifyDirectCaptureServerEvidence(ctx context.Context, origin string, platf
 			return directCaptureValidationError("platform.evidence.conflict", "browser and server platform evidence conflict", false, "manual_add")
 		}
 	case model.SitePlatformSub2API:
-		if !strings.Contains(profile.Path, "profile") || !hasDirectCaptureIdentity(profile.Payload) {
+		if !isSub2APIDirectCaptureProfilePath(profile.Path) || !hasDirectCaptureIdentity(profile.Payload) {
 			return directCaptureValidationError("platform.variant.inconclusive", "server could not confirm Sub2API profile schema", false, "manual_add")
 		}
 	case model.SitePlatformAnyRouter:
@@ -425,6 +425,16 @@ func isDoneHubGroupMapPayload(payload map[string]any) bool {
 		}
 	}
 	return true
+}
+
+func isDirectCaptureIdentityProbePath(path string) bool {
+	lower := strings.ToLower(path)
+	return strings.Contains(lower, "user") || strings.Contains(lower, "profile") || strings.Contains(lower, "auth")
+}
+
+func isSub2APIDirectCaptureProfilePath(path string) bool {
+	lower := strings.ToLower(path)
+	return strings.Contains(lower, "profile") || strings.Contains(lower, "auth/me")
 }
 
 func hasDirectCaptureIdentity(payload map[string]any) bool {
