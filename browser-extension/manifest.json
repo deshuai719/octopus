@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Octopus 登录助手",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "从已登录中转站直接创建或更新 Octopus 站点账号。",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2uL4tYSNPBVzj3XlRNU6OzUHZFwjL8ydkmAgOrR0bIoVDDZVqNYhftALM4Jej8atLn2+dQ27Ktn54aaEgnyz1u41LuLf4NX9NuNCOe6OcjFJLTgBS/328PB525eyawvXuieBN1dOpVB+e827ACEssj8lcRvBtLd8xsAoG6tPY0+1gshzookHfW2nDnuHrEcRVoQ0X1Z7zAjGaay8vsCgof5LRU7M+OXClmvTP2CKVkw760XCyZAVLuT6IoHAMyPqAP3/8SIxYbqHCfA+jMVU8UQ5/dN/7AyZ+hEL8cLjQPJbVmxYwTeNMb44RXurvXXielhPN0ENlS0hC3rA+XwGOwIDAQAB",
   "permissions": ["activeTab", "scripting", "storage", "tabs", "cookies", "sidePanel", "alarms", "nativeMessaging", "downloads"],

@@ -645,7 +645,13 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
   if (areaName === "session" && "octopusDirectCaptureIndexV1" in changes) {
     if (storageRefreshTimer) clearTimeout(storageRefreshTimer);
-    storageRefreshTimer = setTimeout(() => { void refreshSummary(false); }, 100);
+    storageRefreshTimer = setTimeout(() => {
+      void refreshSummary(false);
+      // Dual path: if the main panel is still showing saved_syncing, re-read active capture after session index updates.
+      if (currentOrigin && currentCapture?.phase === "saved_syncing") {
+        void refreshActiveContext();
+      }
+    }, 100);
   }
 });
 

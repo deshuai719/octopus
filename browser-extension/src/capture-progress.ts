@@ -21,7 +21,7 @@ const stepDefinitions: Array<Pick<TransferProgressStep, "key" | "label">> = [
   { key: "detected", label: "识别站点" },
   { key: "previewed", label: "预览已送达" },
   { key: "saved", label: "账号已保存" },
-  { key: "synced", label: "同步完成" },
+  { key: "synced", label: "站点同步" },
 ];
 
 const stateLabel: Record<TransferProgressState, string> = {

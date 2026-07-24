@@ -303,4 +303,50 @@ describe("direct capture worker flow", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toHaveProperty("add_tags");
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).not.toHaveProperty("add_tags");
   });
+
+  it("notifies the panel when summary refresh advances saved_syncing to completed", async () => {
+    sessionValues.octopusDirectCaptureIndexV1 = {
+      "https://relay.example": {
+        origin: "https://relay.example",
+        operation_id: "operation-sync",
+        capture_id: "capture-id",
+        phase: "saved_syncing",
+        expires_at: "2099-01-01T00:00:00Z",
+        generation_attempted: false,
+      },
+    };
+    fetchMock.mockReset().mockResolvedValueOnce(responseAt(
+      "https://octopus.example/api/v1/site/direct-capture/capture-id",
+      JSON.stringify({ data: {
+        capture_id: "capture-id",
+        operation_id: "operation-sync",
+        origin: "https://relay.example",
+        platform: "new-api",
+        phase: "completed",
+        expires_at: "2099-01-01T00:00:00Z",
+        saved: { action: "update_account", site_id: 1, account_id: 2 },
+        sync_result: { status: "success", message: "已同步 7 个分组。" },
+      } }),
+      { status: 200 },
+    ));
+    await import("../src/worker");
+
+    const response = await new Promise<WorkerResponse>((resolve) => {
+      messageHandler!({
+        type: "get_direct_capture_summary",
+        refresh_active: true,
+      }, {} as chrome.runtime.MessageSender, resolve);
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      summary: [expect.objectContaining({ origin: "https://relay.example", phase: "completed" })],
+    });
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: "direct_capture_updated",
+      origin: "https://relay.example",
+      capture: expect.objectContaining({ phase: "completed", sync_result: { status: "success", message: "已同步 7 个分组。" } }),
+    }));
+  });
+
 });

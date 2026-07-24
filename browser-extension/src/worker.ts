@@ -82,7 +82,12 @@ async function refreshDirectCaptureSummary(): Promise<void> {
     await Promise.all(active.slice(offset, offset + 4).map(async (indexed) => {
       try {
         const capture = await octopusAPI<DirectCaptureView>(binding, `/api/v1/site/direct-capture/${encodeURIComponent(indexed.capture_id!)}`, indexed.operation_id);
+        const previousPhase = indexed.phase;
         await putDirectSession({ ...indexed, phase: capture.phase, expires_at: capture.expires_at, capture });
+        // Backend sync finishes asynchronously; push phase transitions so the side panel leaves saved_syncing promptly.
+        if (capture.phase !== previousPhase) {
+          await notifyPanel({ type: "direct_capture_updated", origin: indexed.origin, capture });
+        }
         if (["completed", "sync_failed", "canceled", "failed", "conflict", "expired"].includes(capture.phase)) {
           await revokeDirectPermission(indexed.origin);
         }
