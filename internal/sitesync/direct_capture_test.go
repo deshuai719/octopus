@@ -444,3 +444,51 @@ func TestProbeDirectCaptureProfileSurfacesInvalidTokenMessage(t *testing.T) {
 		t.Fatalf("error = %v, want Invalid token message", err)
 	}
 }
+
+func TestHasSub2APIBrowserVerifiedEvidence(t *testing.T) {
+	if hasSub2APIBrowserVerifiedEvidence([]DirectCaptureEvidence{{Code: "browser.medium.storage.sub2api_access_token"}}) {
+		t.Fatal("profile evidence required")
+	}
+	if !hasSub2APIBrowserVerifiedEvidence([]DirectCaptureEvidence{
+		{Code: "browser.medium.storage.sub2api_token_pair"},
+		{Code: "browser.medium.auth_profile.sub2api"},
+	}) {
+		t.Fatal("expected verified evidence")
+	}
+}
+
+func TestValidateDirectCaptureCandidateSkipsSub2APIServerReauth(t *testing.T) {
+	// Intentionally unreachable origin: skip path must not dial upstream.
+	origin := "https://example.com"
+	validated, err := ValidateDirectCaptureCandidate(context.Background(), DirectCaptureCandidate{
+		Origin:         origin,
+		Platform:       model.SitePlatformSub2API,
+		AccessToken:    "browser-verified-access-token",
+		RefreshToken:   "browser-verified-refresh-token",
+		TokenExpiresAt: 4_102_444_800_000,
+		Evidence: []DirectCaptureEvidence{
+			{Code: "browser.medium.storage.sub2api_access_token"},
+			{Code: "browser.medium.storage.sub2api_token_pair"},
+			{Code: "browser.medium.auth_profile.sub2api"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ValidateDirectCaptureCandidate() error = %v", err)
+	}
+	if validated.Platform != model.SitePlatformSub2API {
+		t.Fatalf("platform = %s", validated.Platform)
+	}
+	if validated.AccessToken != "browser-verified-access-token" {
+		t.Fatalf("access token mismatch")
+	}
+	found := false
+	for _, code := range validated.EvidenceCodes {
+		if code == "server.skipped_reauth.sub2api_session_binding" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("evidence codes = %#v, want skipped_reauth marker", validated.EvidenceCodes)
+	}
+}

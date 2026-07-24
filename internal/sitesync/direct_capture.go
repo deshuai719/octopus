@@ -93,6 +93,26 @@ func ValidateDirectCaptureCandidate(ctx context.Context, input DirectCaptureCand
 	if err != nil {
 		return nil, err
 	}
+
+	// Sub2API access tokens may be bound to the browser login IP/UA ("session network
+	// fingerprint"). Re-validating auth/me from Octopus egress (VPS/proxy) then fails even
+	// when the extension already verified the bearer in-page. Trust browser evidence and
+	// skip server-side re-auth for this platform only.
+	if input.Platform == model.SitePlatformSub2API && hasSub2APIBrowserVerifiedEvidence(input.Evidence) {
+		evidenceCodes := append(append([]string{}, browserEvidence...), "server.skipped_reauth.sub2api_session_binding")
+		return &ValidatedDirectCaptureCandidate{
+			Origin:          origin,
+			Platform:        input.Platform,
+			AccessToken:     accessToken,
+			RefreshToken:    refreshToken,
+			TokenExpiresAt:  input.TokenExpiresAt,
+			PlatformUserID:  cloneDirectCaptureInt(input.PlatformUserID),
+			IdentityLabel:   identityLabel,
+			AccessTokenMask: maskDirectCaptureSecret(accessToken),
+			EvidenceCodes:   evidenceCodes,
+		}, nil
+	}
+
 	profile, err := probeDirectCaptureProfile(ctx, origin, input.Platform, accessToken, input.PlatformUserID, capability.ValidationProbe.Paths)
 	if err != nil {
 		return nil, err
@@ -544,6 +564,20 @@ func isDirectCaptureUpstreamRateLimitBody(body []byte) bool {
 		strings.Contains(lower, "too many failed") ||
 		strings.Contains(lower, "rate limit") ||
 		strings.Contains(lower, "too many requests")
+}
+
+func hasSub2APIBrowserVerifiedEvidence(evidence []DirectCaptureEvidence) bool {
+	hasStorage := false
+	hasProfile := false
+	for _, item := range evidence {
+		switch strings.TrimSpace(item.Code) {
+		case "browser.medium.storage.sub2api_access_token", "browser.medium.storage.sub2api_token_pair":
+			hasStorage = true
+		case "browser.medium.auth_profile.sub2api":
+			hasProfile = true
+		}
+	}
+	return hasStorage && hasProfile
 }
 
 func isDirectCaptureIdentityProbePath(path string) bool {
