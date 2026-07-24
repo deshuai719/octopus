@@ -116,6 +116,7 @@ type LeaseResponse struct {
 	TokenExpiresAt int64  `json:"token_expires_at,omitempty"`
 	Changed        bool   `json:"changed"`
 	AuthOwner      string `json:"auth_owner"`
+	UserAgent      string `json:"user_agent,omitempty"`
 }
 
 func BuildPreview(ctx context.Context) (Preview, error) {
@@ -181,7 +182,20 @@ func Lease(ctx context.Context, request LeaseRequest) (LeaseResponse, error) {
 		TokenExpiresAt: lease.TokenExpiresAt,
 		Changed:        lease.Changed,
 		AuthOwner:      AuthOwnerOctopus,
+		UserAgent:      siteUserAgent(site),
 	}, nil
+}
+
+func siteUserAgent(site *model.Site) string {
+	if site == nil {
+		return ""
+	}
+	for _, item := range site.CustomHeader {
+		if strings.EqualFold(strings.TrimSpace(item.HeaderKey), "User-Agent") {
+			return strings.TrimSpace(item.HeaderValue)
+		}
+	}
+	return ""
 }
 
 func AccessTokenHash(accessToken string) string {
