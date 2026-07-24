@@ -428,3 +428,19 @@ func TestNewDirectCaptureHTTPClientEmptyUsesPublicClient(t *testing.T) {
 		}
 	}
 }
+
+func TestProbeDirectCaptureProfileSurfacesInvalidTokenMessage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"code":"INVALID_TOKEN","message":"Invalid token"}`))
+	}))
+	defer server.Close()
+	_, err := probeDirectCaptureProfileWithClient(context.Background(), server.URL, model.SitePlatformSub2API, "x", nil, []string{"/api/v1/auth/me"}, server.Client())
+	if !apperror.IsCode(err, "direct_capture.auth.invalid") {
+		t.Fatalf("code = %q", apperror.Code(err))
+	}
+	if err == nil || !strings.Contains(err.Error(), "Invalid token") {
+		t.Fatalf("error = %v, want Invalid token message", err)
+	}
+}

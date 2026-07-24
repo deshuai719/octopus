@@ -1,6 +1,7 @@
 package sitesync
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -232,15 +233,24 @@ func probeDirectCaptureProfileWithClient(ctx context.Context, origin string, pla
 		if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
 			// Auth failures are definitive for this candidate. Do not fall through to legacy
 			// profile paths that may 404 and rewrite the error as upstream.failed.
-			if isDirectCaptureUpstreamRateLimitBody(body) {
+			upstreamMsg := extractDirectCaptureUpstreamMessage(body)
+			if isDirectCaptureUpstreamRateLimitBody(body) || strings.Contains(strings.ToLower(upstreamMsg), "ip banned") || strings.Contains(strings.ToLower(upstreamMsg), "too many failed") {
+				msg := "upstream temporarily blocked this egress IP; wait for unban or switch direct-capture proxy"
+				if upstreamMsg != "" {
+					msg = upstreamMsg
+				}
 				return directCaptureProfile{}, directCaptureValidationError(
 					"direct_capture.upstream.rate_limited",
-					"upstream temporarily blocked this server IP; retry later",
+					msg,
 					true,
 					"retry",
 				)
 			}
-			return directCaptureProfile{}, directCaptureValidationError("direct_capture.auth.invalid", "candidate authentication failed", false, "login_again")
+			msg := "candidate authentication failed"
+			if upstreamMsg != "" {
+				msg = upstreamMsg
+			}
+			return directCaptureProfile{}, directCaptureValidationError("direct_capture.auth.invalid", msg, false, "login_again")
 		}
 		if response.StatusCode == http.StatusNotFound {
 			lastErr = directCaptureValidationError("direct_capture.upstream.failed", "upstream validation failed", false, "retry")
@@ -491,6 +501,41 @@ func isDoneHubGroupMapPayload(payload map[string]any) bool {
 		}
 	}
 	return true
+}
+
+func extractDirectCaptureUpstreamMessage(body []byte) string {
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		return ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err == nil {
+		for _, key := range []string{"message", "error", "msg", "detail"} {
+			switch typed := payload[key].(type) {
+			case string:
+				if msg := strings.TrimSpace(typed); msg != "" {
+					return msg
+				}
+			}
+		}
+		if code, ok := payload["code"]; ok {
+			switch typed := code.(type) {
+			case string:
+				if msg := strings.TrimSpace(typed); msg != "" && msg != "0" {
+					// Prefer explicit message when present; otherwise surface code.
+					if message, _ := payload["message"].(string); strings.TrimSpace(message) != "" {
+						return strings.TrimSpace(message)
+					}
+					return msg
+				}
+			}
+		}
+	}
+	text := strings.TrimSpace(string(body))
+	if len(text) > 240 {
+		return text[:240]
+	}
+	return text
 }
 
 func isDirectCaptureUpstreamRateLimitBody(body []byte) bool {
