@@ -14,7 +14,7 @@ async function extensionIDFromPublicKey(publicKey: string): Promise<string> {
 describe("manifest security policy", () => {
   it("keeps the published extension identity stable", async () => {
     expect(await extensionIDFromPublicKey(manifest.key)).toBe(EXPECTED_EXTENSION_ID);
-    expect(manifest.version).toBe("0.3.4");
+    expect(manifest.version).toBe("0.3.5");
   });
 
   it("uses optional origins without permanent broad or debugger access", () => {
