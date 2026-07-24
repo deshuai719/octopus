@@ -240,11 +240,29 @@ describe("direct capture worker flow", () => {
     expect(localValues[OCTOPUS_BINDING_KEY]).toMatchObject({ origin: "https://octopus.example" });
   });
 
-  it("submits structural evidence and never persists the raw candidate", async () => {
+  it("does not auto-capture transfer sites on icon click", async () => {
     await import("../src/worker");
+    const before = fetchMock.mock.calls.length;
     actionHandler!({ id: 7, windowId: 3, url: "https://relay.example/console" } as chrome.tabs.Tab);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fetchMock.mock.calls.length).toBe(before);
+  });
 
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  it("submits structural evidence and never persists the raw candidate", async () => {
+    queryTabs.mockResolvedValue([
+      { id: 7, active: true, windowId: 3, url: "https://relay.example/console" } as chrome.tabs.Tab,
+    ]);
+    await import("../src/worker");
+    const response = await new Promise<WorkerResponse>((resolve) => {
+      messageHandler!(
+        { type: "capture_active_session", expected_origin: "https://relay.example" },
+        {} as chrome.runtime.MessageSender,
+        resolve,
+      );
+    });
+    expect(response).toMatchObject({ ok: true, mode: "direct", origin: "https://relay.example" });
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const previewCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/api/v1/site/direct-capture/preview"));
     expect(previewCall).toBeDefined();
     const body = JSON.parse(String(previewCall?.[1]?.body)) as Record<string, unknown>;

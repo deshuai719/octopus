@@ -141,8 +141,13 @@ func PreviewDirectCapture(ctx context.Context, request DirectCapturePreviewReque
 			directCaptures.mu.Unlock()
 			return view, nil
 		}
-		directCaptures.mu.Unlock()
-		return DirectCaptureView{}, directCaptureError("direct_capture.origin_busy", "this origin already has an active capture", http.StatusConflict, "candidate_validation", false, "restart_capture")
+		// Same origin, different operation: supersede the stale in-memory capture so
+		// re-reads / retries are not blocked by origin_busy after a previous unfinished flow.
+		existing.Phase = DirectCapturePhaseCanceled
+		existing.Validated = nil
+		existing.ErrorCode = "direct_capture.superseded"
+		existing.ErrorMessage = "replaced by a newer capture for the same origin"
+		existing.ExpiresAt = time.Now().Add(directCaptureTerminalTTL)
 	}
 	if directCaptureActiveCountLocked() >= directCaptureMaxActive {
 		directCaptures.mu.Unlock()

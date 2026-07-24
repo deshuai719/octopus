@@ -331,11 +331,35 @@ chrome.action.onClicked.addListener((tab) => {
   void chrome.sidePanel.open({ windowId: tab.windowId }).catch(async (error: unknown) => {
     await notifyPanel({ type: "operation_error", message: sanitizeDiagnosticMessage(error) });
   });
-  const origin = canonicalHTTPOrigin(tab.url);
-  const permissionPromise = origin && chrome.permissions.request
-    ? chrome.permissions.request({ origins: [permissionPattern(origin)] })
-    : Promise.resolve(true);
-  void routeClickedTab(tab, permissionPromise);
+  // Only auto-handle Octopus admin binding on icon click.
+  // Transfer-site credential preview must wait for the explicit side-panel button
+  // ("重新读取当前标签页") so we never upload tokens without a deliberate user action.
+  void (async () => {
+    try {
+      if (!tab.id) return;
+      const origin = canonicalHTTPOrigin(tab.url);
+      if (!origin) return;
+      let pageAuth: Awaited<ReturnType<typeof readPageAuth>> | undefined;
+      try {
+        pageAuth = await readPageAuth(tab.id);
+      } catch {
+        pageAuth = undefined;
+      }
+      if (!pageAuth) {
+        const binding = await getOctopusBinding();
+        if (binding) return;
+        if (!chrome.permissions.request) return;
+        const granted = await chrome.permissions.request({ origins: [permissionPattern(origin)] });
+        if (!granted) return;
+        pageAuth = await readPageAuth(tab.id);
+      }
+      if (pageAuth) {
+        await initializeOctopusBinding(origin, pageAuth);
+      }
+    } catch (error) {
+      await notifyPanel({ type: "operation_error", message: sanitizeDiagnosticMessage(error) });
+    }
+  })();
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
